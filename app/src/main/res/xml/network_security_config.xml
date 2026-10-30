@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Môi trường phát triển: cho phép kết nối đến backend local / emulator -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">42.96.5.186</domain>
+    </domain-config>
+
+    <!-- Mặc định cấm cleartext (bắt buộc HTTPS trong thực tế) -->
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
+

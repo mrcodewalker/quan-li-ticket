@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">SecureTicket</string>
+    <string name="hce_service_desc">SecureTicket HCE Verification Card</string>
+    <string name="hce_aid_desc">SecureTicket Digital NFC Ticket</string>
+</resources>

@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+!.env.example
+
+*.tar.gz
+backend-deploy.tar.gz
+keys/*_private.pem
+keys/server_private.pem
+!keys/server_public.pem
