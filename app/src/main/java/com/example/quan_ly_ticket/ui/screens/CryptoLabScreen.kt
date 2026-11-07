@@ -26,6 +26,7 @@ import com.example.quan_ly_ticket.security.CryptoHelper
 import com.example.quan_ly_ticket.security.HybridCrypto
 import com.example.quan_ly_ticket.security.KeystoreManager
 import com.example.quan_ly_ticket.security.SecurityCheck
+import com.example.quan_ly_ticket.ui.theme.AppBackground
 import javax.crypto.SecretKey
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,18 +74,21 @@ fun CryptoLabScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Phòng thí nghiệm Mật mã (Crypto Lab)", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+    AppBackground {
+        Scaffold(
+            containerColor = Color.Transparent,
+            topBar = {
+                TopAppBar(
+                    title = { Text("Phòng thí nghiệm Mật mã (Crypto Lab)", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
                     }
-                }
-            )
-        }
-    ) { padding ->
+                )
+            }
+        ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -415,5 +419,6 @@ fun CryptoLabScreen(
             }
         }
     }
+}
 }
 
