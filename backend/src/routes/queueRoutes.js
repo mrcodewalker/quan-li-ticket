@@ -54,6 +54,33 @@ router.post('/join', authenticateToken, async (req, res) => {
       });
     }
 
+    // 3b. Kiểm tra nếu người dùng đã đang xếp hàng (WAITING) thì trả lại vị trí hiện tại (tránh xếp trùng)
+    const [existingWaiting] = await pool.execute(
+      `SELECT id, queue_number FROM checkout_queue
+       WHERE event_id = ? AND user_id = ? AND status = 'WAITING'
+       ORDER BY queue_number ASC LIMIT 1`,
+      [eventId, req.user.id]
+    );
+    if (existingWaiting.length > 0) {
+      const [aheadRows] = await pool.execute(
+        `SELECT COUNT(*) as aheadCount FROM checkout_queue
+         WHERE event_id = ? AND status = 'WAITING' AND queue_number < ?`,
+        [eventId, existingWaiting[0].queue_number]
+      );
+      const usersAhead = aheadRows[0].aheadCount;
+      return res.json({
+        success: true,
+        message: 'Bạn đang trong hàng đợi phòng chờ ảo.',
+        data: {
+          queueId: existingWaiting[0].id,
+          status: 'WAITING',
+          queueNumber: existingWaiting[0].queue_number,
+          usersAhead,
+          estimatedWaitSeconds: (usersAhead + 1) * 20
+        }
+      });
+    }
+
     // 4. Đếm số lượng phiên ACTIVE hiện tại
     const [countRows] = await pool.execute(
       `SELECT COUNT(*) as activeCount 

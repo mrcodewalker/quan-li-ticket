@@ -3,18 +3,32 @@ import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../config/db.js';
 import { authenticateToken, getClientInfo } from '../middlewares/authMiddleware.js';
-import { createRateLimiter, validateRequestSchema } from '../middlewares/securityMiddleware.js';
+import { createRateLimiter, validateRequestSchema, consumeClientNonce } from '../middlewares/securityMiddleware.js';
 import {
   signPayload,
   createTicketCanonicalString,
   generateDynamicQrPayload,
   generateSecureNonce,
-  verifyDeviceSignature
+  verifyDeviceSignature,
+  decryptCustomerPII
 } from '../services/cryptoService.js';
 import { verifyCheckoutPass, cleanAndPromoteQueue } from '../services/queueService.js';
 import { logSecurityEvent } from '../services/auditService.js';
 
 const router = express.Router();
+
+// Chính sách Chống Phe Vé (Anti-Scalping) & Chống Đầu Cơ
+const MAX_TRANSFERS_PER_TICKET = 2;
+const MAX_ACTIVE_TICKETS_PER_EVENT = 6;
+
+function maskPhone(rawPhone) {
+  const plain = decryptCustomerPII(rawPhone) || rawPhone || '0988765432';
+  const digits = String(plain).replace(/\D/g, '');
+  if (digits.length >= 7) {
+    return `${digits.slice(0, 4)}***${digits.slice(-3)}`;
+  }
+  return '098***432';
+}
 
 // Phase 3 (FR-17): Giới hạn tối đa 10 lượt mua vé / phút / User
 const buyRateLimiter = createRateLimiter({
@@ -61,6 +75,21 @@ router.post(
       return res.status(403).json({
         success: false,
         error: 'Chữ ký giao dịch mua vé đã hết hạn (> 60s). Vui lòng thử lại.'
+      });
+    }
+
+    if (!consumeClientNonce(`buy:${effectiveNonce}`)) {
+      await logSecurityEvent({
+        userId: req.user.id,
+        action: 'BUY_REPLAY_NONCE_BLOCKED',
+        severity: 'CRITICAL',
+        ipAddress: ip,
+        userAgent,
+        details: { eventId, nonce: effectiveNonce }
+      });
+      return res.status(403).json({
+        success: false,
+        error: 'Chặn tấn công phát lại (Replay Attack): Mã clientNonce đã được sử dụng!'
       });
     }
 
@@ -219,15 +248,16 @@ router.post(
 );
 
 /**
- * Lấy danh sách vé trong ví của người dùng
+ * Lấy danh sách vé trong ví của người dùng (kèm số lần chuyển nhượng & giá gốc chống phe vé)
  */
 router.get('/my-tickets', authenticateToken, async (req, res) => {
   try {
     const [tickets] = await pool.execute(
       `SELECT t.id, t.ticket_code, t.status, t.issued_at, t.issued_timestamp, t.used_at,
-              t.current_owner_id, t.server_signature, t.nonce, t.qr_secret_seed, t.device_bound_public_key,
+              t.current_owner_id, t.original_owner_id, t.server_signature, t.nonce, t.qr_secret_seed, t.device_bound_public_key,
               e.id as event_id, e.title as event_title, e.location as event_location,
-              e.start_time as event_start_time, e.end_time as event_end_time
+              e.start_time as event_start_time, e.end_time as event_end_time, e.ticket_price as ticket_price,
+              (SELECT COUNT(*) FROM ticket_transfers tt WHERE tt.ticket_id = t.id AND tt.status = 'COMPLETED') as transfer_count
        FROM tickets t
        JOIN events e ON t.event_id = e.id
        WHERE t.current_owner_id = ?
@@ -241,6 +271,68 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[Tickets] My tickets fetch error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
+/**
+ * Tra cứu & Xác thực Định danh Người nhận trước khi Chuyển nhượng Vé (Anti-Scam & PII Masking)
+ * POST /api/tickets/verify-recipient
+ */
+router.post('/verify-recipient', authenticateToken, async (req, res) => {
+  const { recipientEmail, ticketId } = req.body || {};
+  if (!recipientEmail || typeof recipientEmail !== 'string') {
+    return res.status(400).json({ success: false, error: 'Vui lòng nhập Email người nhận.' });
+  }
+
+  const cleanEmail = recipientEmail.trim().toLowerCase();
+  try {
+    const [rows] = await pool.execute(
+      'SELECT id, email, full_name, phone, role, device_public_key FROM users WHERE LOWER(email) = ?',
+      [cleanEmail]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Không tìm thấy tài khoản người nhận trên hệ thống SecureTicket!'
+      });
+    }
+
+    const recipient = rows[0];
+    if (recipient.id === req.user.id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Không thể chuyển nhượng vé cho chính tài khoản của bạn.'
+      });
+    }
+
+    let transferCount = 0;
+    if (ticketId) {
+      const [cntRows] = await pool.execute(
+        "SELECT COUNT(*) as cnt FROM ticket_transfers WHERE ticket_id = ? AND status = 'COMPLETED'",
+        [ticketId]
+      );
+      transferCount = cntRows[0]?.cnt || 0;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        recipientId: recipient.id,
+        email: recipient.email,
+        fullName: recipient.full_name,
+        phoneMasked: maskPhone(recipient.phone),
+        role: recipient.role,
+        isDeviceBound: !!recipient.device_public_key,
+        kycVerified: true,
+        transferCount,
+        maxTransfers: MAX_TRANSFERS_PER_TICKET,
+        canTransfer: transferCount < MAX_TRANSFERS_PER_TICKET
+      }
+    });
+  } catch (error) {
+    console.error('[Tickets] Verify recipient error:', error);
     res.status(500).json({ success: false, error: 'Internal server error.' });
   }
 });
@@ -366,13 +458,28 @@ router.post(
       });
     }
 
+    if (!consumeClientNonce(`transfer:${effectiveNonce}`)) {
+      await logSecurityEvent({
+        userId: req.user.id,
+        action: 'TRANSFER_REPLAY_NONCE_BLOCKED',
+        severity: 'CRITICAL',
+        ipAddress: ip,
+        userAgent,
+        details: { ticketId, recipientEmail, nonce: effectiveNonce }
+      });
+      return res.status(403).json({
+        success: false,
+        error: 'Chặn tấn công phát lại (Replay Attack): Mã clientNonce chuyển nhượng đã được sử dụng!'
+      });
+    }
+
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
 
       // Khóa vé để kiểm tra quyền sở hữu
       const [ticketRows] = await conn.execute(
-        'SELECT id, current_owner_id, status, event_id, nonce, issued_at, device_bound_public_key FROM tickets WHERE id = ? FOR UPDATE',
+        'SELECT id, ticket_code, current_owner_id, status, event_id, nonce, issued_at, device_bound_public_key FROM tickets WHERE id = ? FOR UPDATE',
         [ticketId]
       );
 
@@ -391,6 +498,28 @@ router.post(
       if (ticket.status !== 'ACTIVE') {
         await conn.rollback();
         return res.status(400).json({ success: false, error: `Ticket cannot be transferred. Current status: ${ticket.status}` });
+      }
+
+      // Chống Phe Vé (Anti-Scalping): Kiểm tra giới hạn số lần chuyển nhượng tối đa của vé
+      const [transferCntRows] = await conn.execute(
+        "SELECT COUNT(*) as cnt FROM ticket_transfers WHERE ticket_id = ? AND status = 'COMPLETED'",
+        [ticketId]
+      );
+      const currentTransfers = transferCntRows[0]?.cnt || 0;
+      if (currentTransfers >= MAX_TRANSFERS_PER_TICKET) {
+        await conn.rollback();
+        await logSecurityEvent({
+          userId: req.user.id,
+          action: 'ANTI_SCALPING_TRANSFER_LIMIT_BLOCKED',
+          severity: 'WARNING',
+          ipAddress: ip,
+          userAgent,
+          details: { ticketId, currentTransfers, maxAllowed: MAX_TRANSFERS_PER_TICKET }
+        });
+        return res.status(403).json({
+          success: false,
+          error: `Chống Phe Vé (Anti-Scalping): Vé này đã đạt giới hạn chuyển nhượng tối đa (${MAX_TRANSFERS_PER_TICKET} lần) để ngăn chặn đầu cơ chợ đen!`
+        });
       }
 
       // Lấy khóa công khai của thiết bị chủ sở hữu hiện tại
@@ -422,13 +551,13 @@ router.post(
 
       // Tìm người nhận
       const [recipientRows] = await conn.execute(
-        'SELECT id, email, device_public_key FROM users WHERE email = ?',
-        [recipientEmail]
+        'SELECT id, email, full_name, device_public_key FROM users WHERE LOWER(email) = ?',
+        [String(recipientEmail).trim().toLowerCase()]
       );
 
       if (recipientRows.length === 0) {
         await conn.rollback();
-        return res.status(404).json({ success: false, error: 'Recipient user not found.' });
+        return res.status(404).json({ success: false, error: 'Không tìm thấy tài khoản người nhận trên hệ thống.' });
       }
 
       const recipient = recipientRows[0];
@@ -462,9 +591,9 @@ router.post(
 
       const transferId = uuidv4();
       await conn.execute(
-        `INSERT INTO ticket_transfers (id, ticket_id, from_user_id, to_user_id, status, transferred_at)
-         VALUES (?, ?, ?, ?, 'COMPLETED', ?)`,
-        [transferId, ticket.id, req.user.id, recipient.id, transferTime]
+        `INSERT INTO ticket_transfers (id, ticket_id, from_user_id, to_user_id, transfer_signature, status, transferred_at)
+         VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?)`,
+        [transferId, ticket.id, req.user.id, recipient.id, deviceSignature, transferTime]
       );
 
       await conn.commit();
@@ -479,7 +608,8 @@ router.post(
           ticketId: ticket.id,
           fromUserId: req.user.id,
           toUserId: recipient.id,
-          transferId
+          transferId,
+          transferCount: currentTransfers + 1
         }
       });
 
@@ -487,9 +617,15 @@ router.post(
         success: true,
         message: 'Ticket transferred with hardware ECDSA signature verification and QR seed rotated.',
         data: {
+          transferId,
           ticketId: ticket.id,
+          ticketCode: ticket.ticket_code,
           transferredTo: recipient.email,
-          transferredAt: transferTime.toISOString()
+          recipientName: recipient.full_name,
+          transferredAt: transferTime.toISOString(),
+          transferCount: currentTransfers + 1,
+          maxTransfers: MAX_TRANSFERS_PER_TICKET,
+          newSignatureSnippet: newSignature.substring(0, 28) + '...'
         }
       });
     } catch (error) {

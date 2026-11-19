@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quan_ly_ticket.data.api.ApiClient
 import com.example.quan_ly_ticket.data.local.EncryptedTicketVault
+import com.example.quan_ly_ticket.data.model.CancelOrderRequest
 import com.example.quan_ly_ticket.data.model.CreateOrderData
 import com.example.quan_ly_ticket.data.model.SimulatePaymentRequest
 import com.example.quan_ly_ticket.data.model.Ticket
@@ -57,6 +59,8 @@ fun PaymentScreen(
     var remainingSeconds by remember { mutableIntStateOf(order.ttlSeconds) }
     var isSimulating by remember { mutableStateOf(false) }
     var paymentStatusText by remember { mutableStateOf("Đang chờ thanh toán chuyển khoản...") }
+    var successTicket by remember { mutableStateOf<Ticket?>(null) }
+    var successVia by remember { mutableStateOf("Chuyển khoản Napas 247 · SePay") }
 
     fun copyToClipboard(label: String, text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -95,7 +99,7 @@ fun PaymentScreen(
 
     // 2. Vòng lặp đếm ngược thời gian thanh toán (5 phút)
     LaunchedEffect(Unit) {
-        while (remainingSeconds > 0 && isActive) {
+        while (remainingSeconds > 0 && successTicket == null && isActive) {
             delay(1000L)
             remainingSeconds--
         }
@@ -104,7 +108,7 @@ fun PaymentScreen(
     // 3. Tự động thăm dò (Polling) trạng thái đơn hàng mỗi 2.5 giây
     LaunchedEffect(order.orderId) {
         val api = ApiClient.getService(context)
-        while (remainingSeconds > 0 && isActive) {
+        while (remainingSeconds > 0 && successTicket == null && isActive) {
             delay(2500L)
             try {
                 val statusRes = api.getOrderStatus(order.orderId)
@@ -141,9 +145,8 @@ fun PaymentScreen(
                             e.printStackTrace()
                         }
 
-                        Toast.makeText(context, "Thanh toán thành công! Vé đã được ký số.", Toast.LENGTH_LONG).show()
-                        delay(800L)
-                        onPaymentSuccess(fullTicket)
+                        successVia = "Chuyển khoản Napas 247 · SePay"
+                        successTicket = fullTicket
                         break
                     } else if (statusData.status == "EXPIRED") {
                         Toast.makeText(context, "Đơn hàng đã hết thời hạn thanh toán.", Toast.LENGTH_SHORT).show()
@@ -167,7 +170,12 @@ fun PaymentScreen(
                     title = { Text("Thanh toán vé sự kiện", fontWeight = FontWeight.Bold) },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                     navigationIcon = {
-                        IconButton(onClick = onCancel) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                try { ApiClient.getService(context).cancelOrder(CancelOrderRequest(order.orderId)) } catch (_: Exception) {}
+                                onCancel()
+                            }
+                        }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     }
@@ -330,7 +338,9 @@ fun PaymentScreen(
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(4.dp)
+                                        modifier = Modifier
+                                            .clickable { copyToClipboard("Số tài khoản", order.bankAccountNo) }
+                                            .padding(4.dp)
                                     )
                                 }
                             }
@@ -378,7 +388,9 @@ fun PaymentScreen(
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(4.dp)
+                                        modifier = Modifier
+                                            .clickable { copyToClipboard("Nội dung chuyển khoản", order.transferContent) }
+                                            .padding(4.dp)
                                     )
                                 }
                             }
@@ -405,7 +417,7 @@ fun PaymentScreen(
                             val api = ApiClient.getService(context)
                             val simRes = api.simulatePayment(SimulatePaymentRequest(orderId = order.orderId))
                             if (simRes.isSuccessful && simRes.body()?.success == true) {
-                                Toast.makeText(context, "⚡ [Sandbox] Thanh toán thành công! Đang cấp vé...", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "⚡ [Sandbox] Đang cấp vé...", Toast.LENGTH_SHORT).show()
                                 var ticket = simRes.body()!!.data
                                 if (ticket != null) {
                                     if (ticket.eventTitle.isNullOrEmpty()) {
@@ -433,8 +445,8 @@ fun PaymentScreen(
                                         e.printStackTrace()
                                     }
 
-                                    delay(500L)
-                                    onPaymentSuccess(ticket)
+                                    successVia = "Sandbox giả lập"
+                                    successTicket = ticket
                                 }
                             } else {
                                 Toast.makeText(context, simRes.body()?.error ?: "Lỗi giả lập", Toast.LENGTH_SHORT).show()
@@ -463,11 +475,16 @@ fun PaymentScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedButton(
-                onClick = onCancel,
+                onClick = {
+                    scope.launch {
+                        try { ApiClient.getService(context).cancelOrder(CancelOrderRequest(order.orderId)) } catch (_: Exception) {}
+                        onCancel()
+                    }
+                },
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Hủy giao dịch")
+                Text("Hủy giao dịch & nhường lượt hàng đợi")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -503,5 +520,22 @@ fun PaymentScreen(
         }
     }
 }
+
+    // Overlay ăn mừng thanh toán thành công (thay cho Toast)
+    androidx.compose.animation.AnimatedVisibility(
+        visible = successTicket != null,
+        enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(300))
+    ) {
+        successTicket?.let { t ->
+            PaymentSuccessOverlay(
+                ticket = t,
+                amount = order.amount,
+                orderCode = order.orderCode,
+                paidVia = successVia,
+                onViewTicket = { onPaymentSuccess(t) },
+                onGoHome = onCancel
+            )
+        }
+    }
 }
 

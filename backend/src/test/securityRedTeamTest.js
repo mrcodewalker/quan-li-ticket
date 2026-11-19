@@ -6,7 +6,8 @@ import {
   securityHeadersMiddleware,
   createRateLimiter,
   resetAllRateLimiters,
-  validateRequestSchema
+  validateRequestSchema,
+  consumeClientNonce
 } from '../middlewares/securityMiddleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,6 +28,8 @@ if (fs.existsSync(envPath)) {
     }
   }
 }
+process.env.SEPAY_WEBHOOK_SECRET = process.env.SEPAY_WEBHOOK_SECRET || 'SecureTicket_Payment_Webhook_HMAC_Secret_2026';
+process.env.PII_ENCRYPTION_KEY = process.env.PII_ENCRYPTION_KEY || '8f4b2e1a9c7d6e5f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f';
 
 function mockRes() {
   return {
@@ -274,6 +277,16 @@ async function runRedTeamSuite() {
     'Phase 3 (FR-14 & FR-17): Rate Limiting chống Brute-force Login (HTTP 429) & HTTP Security Headers',
     sixthStatus === 429 && hasHeaders,
     `Request đăng nhập thứ 6/phút -> HTTP ${sixthStatus} (Retry-After: ${lastRes.headers['retry-after']}s) | HSTS & X-Frame-Options: DENY`
+  );
+
+  // 9. Anti-Cheat & Anti-Scalping: Chống Replay Nonce giao dịch & Giới hạn số lần chuyển nhượng vé
+  const testNonce = 'transfer:9f8a7b6c5d4e3f2a1b0c';
+  const firstNonceUse = consumeClientNonce(testNonce);
+  const replayNonceUse = consumeClientNonce(testNonce);
+  assertTest(
+    'Anti-Cheat & Anti-Replay: Chặn phát lại Nonce giao dịch mua/chuyển vé (One-Time Nonce Guard)',
+    firstNonceUse === true && replayNonceUse === false,
+    `Lần 1 sử dụng Nonce: ${firstNonceUse} (Hợp lệ) | Lần 2 phát lại cùng Nonce: ${replayNonceUse} (Chặn Replay Attack)`
   );
 
   console.log('\n======================================================================');

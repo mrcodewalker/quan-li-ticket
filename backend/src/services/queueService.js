@@ -2,8 +2,9 @@ import { v4 as uuidv4 } from 'uuid';
 import jwt from 'jsonwebtoken';
 import { pool } from '../config/db.js';
 
-// Cấu hình số người tối đa được vào trang thanh toán cùng một lúc (VD: 100 người)
-export const MAX_CONCURRENT_CHECKOUTS = 100;
+// Cấu hình số người tối đa được vào trang thanh toán cùng một lúc
+// (Production: 100 qua env MAX_CONCURRENT_CHECKOUTS; mặc định 1 để dễ demo phòng chờ ảo với 2 thiết bị)
+export const MAX_CONCURRENT_CHECKOUTS = parseInt(process.env.MAX_CONCURRENT_CHECKOUTS || '1', 10);
 
 // Thời gian tối đa được giữ chỗ thanh toán (5 phút = 300 giây)
 export const CHECKOUT_TTL_SECONDS = 300;
@@ -39,13 +40,14 @@ export async function cleanAndPromoteQueue(eventId) {
 
     // 3. Nếu còn chỗ trống, đôn những người đang xếp hàng (WAITING) lên (ACTIVE) theo thứ tự FIFO
     if (availableSlots > 0) {
+      const safeLimit = Math.max(1, parseInt(availableSlots, 10));
       const [waitingUsers] = await conn.execute(
         `SELECT id, user_id, queue_number 
          FROM checkout_queue 
          WHERE event_id = ? AND status = 'WAITING' 
          ORDER BY queue_number ASC 
-         LIMIT ? FOR UPDATE`,
-        [eventId, availableSlots]
+         LIMIT ${safeLimit} FOR UPDATE`,
+        [eventId]
       );
 
       for (const item of waitingUsers) {

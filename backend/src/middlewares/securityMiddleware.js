@@ -55,6 +55,36 @@ export function createRateLimiter({ windowMs = 60000, maxRequests = 30, keyPrefi
 
 export function resetAllRateLimiters() {
   rateBuckets.clear();
+  consumedNonces.clear();
+}
+
+/**
+ * Bộ nhớ chống phát lại gói tin (Anti-Replay Nonce Cache)
+ * Lưu trữ các clientNonce đã sử dụng trong cửa sổ thời gian (mặc định 5 phút)
+ */
+const consumedNonces = new Map(); // nonce -> expiresAt
+
+export function consumeClientNonce(nonce, ttlMs = 5 * 60 * 1000) {
+  if (!nonce || typeof nonce !== 'string' || nonce.trim().length < 8) {
+    return false;
+  }
+  const cleanNonce = nonce.trim();
+  const now = Date.now();
+
+  // Dọn dẹp các nonce đã hết hạn khi bộ nhớ lớn
+  if (consumedNonces.size > 2000) {
+    for (const [k, exp] of consumedNonces.entries()) {
+      if (now > exp) consumedNonces.delete(k);
+    }
+  }
+
+  const existingExp = consumedNonces.get(cleanNonce);
+  if (existingExp && now <= existingExp) {
+    return false; // Phát hiện Replay Attack: Nonce này đã được sử dụng!
+  }
+
+  consumedNonces.set(cleanNonce, now + ttlMs);
+  return true;
 }
 
 const DANGEROUS_KEYS = ['__proto__', 'constructor', 'prototype'];

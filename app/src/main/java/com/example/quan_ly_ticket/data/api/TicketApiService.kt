@@ -40,6 +40,9 @@ interface TicketApiService {
     @GET("api/queue/status/{queueId}")
     suspend fun getQueueStatus(@Path("queueId") queueId: String): Response<ApiResponse<QueueData>>
 
+    @POST("api/queue/leave")
+    suspend fun leaveQueue(@Body request: LeaveQueueRequest): Response<ApiResponse<Any>>
+
     // --- Tickets ---
     @POST("api/tickets/buy")
     suspend fun buyTicket(@Body request: BuyTicketRequest): Response<ApiResponse<Ticket>>
@@ -49,6 +52,9 @@ interface TicketApiService {
 
     @GET("api/tickets/{id}/dynamic-qr")
     suspend fun getDynamicQr(@Path("id") ticketId: String): Response<ApiResponse<DynamicQrData>>
+
+    @POST("api/tickets/verify-recipient")
+    suspend fun verifyRecipient(@Body request: VerifyRecipientRequest): Response<ApiResponse<RecipientVerifyData>>
 
     @POST("api/tickets/transfer")
     suspend fun transferTicket(@Body request: TransferTicketRequest): Response<ApiResponse<Any>>
@@ -62,6 +68,9 @@ interface TicketApiService {
 
     @POST("api/payment/simulate-transfer")
     suspend fun simulatePayment(@Body request: SimulatePaymentRequest): Response<ApiResponse<Ticket>>
+
+    @POST("api/payment/cancel-order")
+    suspend fun cancelOrder(@Body request: CancelOrderRequest): Response<ApiResponse<Any>>
 
     // --- Staff Validation ---
     @POST("api/validate/validate-qr")

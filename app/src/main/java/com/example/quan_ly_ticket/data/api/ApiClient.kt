@@ -30,6 +30,10 @@ object ApiClient {
 
         val appContext = context.applicationContext
         val securePrefs = SecurePreferences(appContext)
+        val apkSigDigest = com.example.quan_ly_ticket.security.SecurityCheck
+            .getApkSignatureSha256(appContext)
+            .replace(":", "")
+            .take(16)
 
         // Phase 1 (FR-07): Bảo vệ Logcat - Không in Body chứa mật khẩu, JWT hay qr_secret_seed ra Logcat
         val loggingInterceptor = HttpLoggingInterceptor().apply {
@@ -40,6 +44,7 @@ object ApiClient {
             }
             redactHeader("Authorization")
             redactHeader("X-Device-Signature")
+            redactHeader("X-Device-Integrity")
         }
 
         val clientBuilder = OkHttpClient.Builder()
@@ -47,11 +52,20 @@ object ApiClient {
             .readTimeout(15, TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val requestBuilder = chain.request().newBuilder()
+                    .header("X-Client-Platform", "Android-Native")
+                    .header("X-Request-Timestamp", (System.currentTimeMillis() / 1000L).toString())
+                    .header("X-Request-Nonce", java.util.UUID.randomUUID().toString().replace("-", ""))
+                    .header("X-Device-Integrity", apkSigDigest)
                 val token = securePrefs.getAccessToken()
                 if (!token.isNullOrEmpty()) {
                     requestBuilder.header("Authorization", "Bearer $token")
                 }
-                chain.proceed(requestBuilder.build())
+                val response = chain.proceed(requestBuilder.build())
+                // Anti-Time-Cheat: Đồng bộ kiểm tra độ lệch đồng hồ với Server Date Header
+                response.headers.getDate("Date")?.let { serverDate ->
+                    com.example.quan_ly_ticket.security.SecurityCheck.recordServerTimeDrift(serverDate.time)
+                }
+                response
             }
             .authenticator(TokenAuthenticator(appContext) { baseUrl })
             .addInterceptor(loggingInterceptor)

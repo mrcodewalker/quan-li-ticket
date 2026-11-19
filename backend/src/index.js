@@ -37,7 +37,17 @@ app.use(cors({
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Signature', 'x-sepay-signature', 'x-sepay-timestamp']
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Device-Signature',
+    'X-Client-Platform',
+    'X-Request-Timestamp',
+    'X-Request-Nonce',
+    'X-Device-Integrity',
+    'x-sepay-signature',
+    'x-sepay-timestamp'
+  ]
 }));
 
 app.use(express.json({

@@ -3,10 +3,12 @@ import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../config/db.js';
 import { authenticateToken, getClientInfo } from '../middlewares/authMiddleware.js';
+import { consumeClientNonce } from '../middlewares/securityMiddleware.js';
 import {
   signPayload,
   createTicketCanonicalString,
-  generateSecureNonce
+  generateSecureNonce,
+  verifyDeviceSignature
 } from '../services/cryptoService.js';
 import { verifyCheckoutPass, cleanAndPromoteQueue } from '../services/queueService.js';
 import { logSecurityEvent } from '../services/auditService.js';
@@ -20,12 +22,17 @@ const BANK_ACCOUNT_NO = process.env.BANK_ACCOUNT_NO || '0696961698888';
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'MB BANK';
 const VIETQR_TEMPLATE = process.env.VIETQR_TEMPLATE || 'compact2';
 
+const SEAT_ZONES = ['VIP-A', 'VIP-B', 'FANZONE', 'PLATINUM', 'PREM-S', 'STAGE-V'];
+
 /**
  * Hàm hỗ trợ xuất vé an toàn sau khi thanh toán thành công
  */
 async function issueTicketOnPayment(conn, order, user) {
   const ticketId = uuidv4();
-  const ticketCode = 'TKT-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+  const zone = SEAT_ZONES[Math.floor(Math.random() * SEAT_ZONES.length)];
+  const seatNum = String(Math.floor(10 + Math.random() * 89));
+  const suffix = crypto.randomBytes(2).toString('hex').toUpperCase();
+  const ticketCode = `${zone}${seatNum}-${suffix}`;
   const nonce = generateSecureNonce(16);
   const qrSecretSeed = generateSecureNonce(32);
   const issuedTimestamp = Math.floor(Date.now() / 1000);
@@ -61,11 +68,19 @@ async function issueTicketOnPayment(conn, order, user) {
     [ticketId, order.id]
   );
 
+  // Giải phóng lượt trong phòng chờ ảo (Virtual Waiting Room) để đôn người kế tiếp vào ngay
+  await conn.execute(
+    `UPDATE checkout_queue SET status = 'COMPLETED'
+     WHERE event_id = ? AND user_id = ? AND status = 'ACTIVE'`,
+    [order.event_id, order.user_id]
+  );
+
   // Lấy toàn bộ thông tin vé đầy đủ (kèm thông tin sự kiện) để trả về cho Android app
   const [fullTicketRows] = await conn.execute(
-    `SELECT t.id, t.ticket_code, t.event_id, t.status, t.issued_at,
+    `SELECT t.id, t.ticket_code, t.event_id, t.status, t.issued_at, t.issued_timestamp,
             t.server_signature, t.nonce, t.qr_secret_seed, t.device_bound_public_key,
-            e.title as event_title, e.location as event_location, e.start_time as event_start_time
+            e.title as event_title, e.location as event_location, e.start_time as event_start_time,
+            e.ticket_price as ticket_price, 0 as transfer_count
      FROM tickets t
      JOIN events e ON t.event_id = e.id
      WHERE t.id = ?`,
@@ -76,15 +91,32 @@ async function issueTicketOnPayment(conn, order, user) {
 }
 
 /**
- * 1. Tạo đơn hàng và mã thanh toán VietQR động
+ * 1. Tạo đơn hàng và mã thanh toán VietQR động (Có xác thực chữ ký phần cứng TEE & Anti-Replay)
  * POST /api/payment/create-vietqr
  */
 router.post('/create-vietqr', authenticateToken, async (req, res) => {
-  const { eventId, passToken } = req.body;
+  const { eventId, passToken, clientNonce, timestamp, deviceSignature } = req.body;
   const { ip, userAgent } = getClientInfo(req);
 
   if (!eventId) {
     return res.status(400).json({ success: false, error: 'eventId is required.' });
+  }
+
+  // Kiểm tra Anti-Replay Nonce & Timestamp nếu client gửi chữ ký thiết bị
+  if (clientNonce && timestamp) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Math.abs(nowSec - Number(timestamp)) > 90) {
+      return res.status(403).json({
+        success: false,
+        error: 'Chữ ký tạo đơn hàng đã quá hạn thời gian (> 90s). Vui lòng kiểm tra đồng hồ thiết bị.'
+      });
+    }
+    if (!consumeClientNonce(`vietqr:${clientNonce}`)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Chặn Replay Attack: Mã clientNonce tạo đơn hàng đã được sử dụng!'
+      });
+    }
   }
 
   // Xác thực quyền vào mua từ hàng đợi ảo (nếu có passToken)
@@ -648,6 +680,48 @@ router.post('/simulate-transfer', authenticateToken, async (req, res) => {
   } catch (err) {
     await conn.rollback();
     console.error('[Payment Simulate] Error:', err);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  } finally {
+    conn.release();
+  }
+});
+
+/**
+ * 5. Hủy đơn thanh toán & giải phóng lượt phòng chờ ảo ngay lập tức cho người tiếp theo
+ * POST /api/payment/cancel-order
+ */
+router.post('/cancel-order', authenticateToken, async (req, res) => {
+  const { orderId } = req.body || {};
+  if (!orderId) {
+    return res.status(400).json({ success: false, error: 'orderId is required.' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.execute(
+      'SELECT id, event_id, user_id, status FROM orders WHERE id = ? AND user_id = ? FOR UPDATE',
+      [orderId, req.user.id]
+    );
+    if (rows.length > 0) {
+      const order = rows[0];
+      if (order.status === 'PENDING') {
+        await conn.execute("UPDATE orders SET status = 'CANCELLED' WHERE id = ?", [order.id]);
+        await conn.execute('UPDATE events SET available_tickets = available_tickets + 1 WHERE id = ?', [order.event_id]);
+      }
+      await conn.execute(
+        "UPDATE checkout_queue SET status = 'CANCELLED' WHERE event_id = ? AND user_id = ? AND status = 'ACTIVE'",
+        [order.event_id, req.user.id]
+      );
+      await conn.commit();
+      cleanAndPromoteQueue(order.event_id).catch(err => console.error('[QueuePromote] Error:', err.message));
+    } else {
+      await conn.rollback();
+    }
+    res.json({ success: true, message: 'Đã hủy đơn và nhường lượt phòng chờ.' });
+  } catch (err) {
+    await conn.rollback();
+    console.error('[Payment Cancel] Error:', err);
     res.status(500).json({ success: false, error: 'Internal server error.' });
   } finally {
     conn.release();

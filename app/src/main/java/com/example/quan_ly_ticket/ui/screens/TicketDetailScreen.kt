@@ -39,6 +39,8 @@ import com.example.quan_ly_ticket.data.api.ApiClient
 import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.data.model.TransferTicketRequest
+import com.example.quan_ly_ticket.data.model.RecipientVerifyData
+import com.example.quan_ly_ticket.data.model.VerifyRecipientRequest
 import com.example.quan_ly_ticket.security.CryptoHelper
 import com.example.quan_ly_ticket.security.KeystoreManager
 import com.example.quan_ly_ticket.service.SecureTicketHceService
@@ -67,8 +69,6 @@ fun TicketDetailScreen(
     var currentTotpToken by remember { mutableStateOf("648291") }
     var isNfcActive by remember { mutableStateOf(true) }
     var showTransferModal by remember { mutableStateOf(false) }
-    var recipientEmail by remember { mutableStateOf("friend@example.com") }
-    var isTransferring by remember { mutableStateOf(false) }
     var showCryptoDetails by remember { mutableStateOf(true) }
     var signatureCheckResult by remember { mutableStateOf<String?>(null) }
     var isQrShielded by remember { mutableStateOf(false) }
@@ -291,7 +291,7 @@ fun TicketDetailScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = ticket.eventStartTime ?: "14.11.2026 · 18:30",
+                                    text = formatEventTime(ticket.eventStartTime) ?: "14.11.2026 · 18:30",
                                     fontSize = 11.sp,
                                     color = Color(0xFFD7E0FF),
                                     fontWeight = FontWeight.Medium
@@ -300,7 +300,8 @@ fun TicketDetailScreen(
                                     text = ticket.eventLocation ?: "SECC · Hall A",
                                     fontSize = 11.sp,
                                     color = Color(0xFFD7E0FF),
-                                    fontWeight = FontWeight.Medium
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -714,137 +715,400 @@ fun TicketDetailScreen(
         }
     }
 
-    // ================= TRANSFER MODAL / BOTTOM SHEET (WITH BIOMETRIC + HARDWARE ECDSA SIGNATURE) =================
+    // ================= TRANSFER MODAL: 3 BƯỚC XÁC THỰC (Verify recipient -> Confirm -> Biometric + TEE signature) =================
     if (showTransferModal) {
-        ModalBottomSheet(
-            onDismissRequest = { showTransferModal = false },
-            containerColor = Color.White,
-            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+        SecureTransferSheet(
+            ticket = ticket,
+            onDismiss = { showTransferModal = false },
+            onRequireBiometric = onRequireBiometric,
+            onTransferred = {
+                showTransferModal = false
+                onBack()
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SecureTransferSheet(
+    ticket: Ticket,
+    onDismiss: () -> Unit,
+    onRequireBiometric: (title: String, subtitle: String, onVerified: () -> Unit) -> Unit,
+    onTransferred: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var step by remember { mutableIntStateOf(1) }
+    var recipientEmail by remember { mutableStateOf("") }
+    var recipient by remember { mutableStateOf<RecipientVerifyData?>(null) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+    var isBusy by remember { mutableStateOf(false) }
+    var confirmNoPayment by remember { mutableStateOf(false) }
+    var confirmIdentity by remember { mutableStateOf(false) }
+    var typedCode by remember { mutableStateOf("") }
+    var resultMessage by remember { mutableStateOf<String?>(null) }
+
+    val expectedCode = ticket.ticketCode.takeLast(4).uppercase()
+    val transferCount = ticket.transferCount ?: 0
+
+    ModalBottomSheet(
+        onDismissRequest = { if (!isBusy) onDismiss() },
+        containerColor = Color.White,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp)
+                .verticalScroll(rememberScrollState())
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp)
-                    .padding(bottom = 32.dp)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Default.Fingerprint, contentDescription = null, tint = PrimaryBlue)
+                Text("Chuyển nhượng vé an toàn", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
+            }
+
+            // Step indicator
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(Icons.Default.Fingerprint, contentDescription = null, tint = PrimaryBlue)
-                    Text(
-                        text = "Chuyển nhượng vé Zero-Trust",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = TextDark
-                    )
+                listOf("Xác minh", "Xác nhận", "Ký số").forEachIndexed { idx, label ->
+                    val active = step >= idx + 1
+                    Column(modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(if (active) PrimaryBlue else Color(0xFFE2E8F0))
+                        )
+                        Text(
+                            "${idx + 1}. $label", fontSize = 10.sp,
+                            fontWeight = if (active) FontWeight.ExtraBold else FontWeight.Medium,
+                            color = if (active) PrimaryBlue else TextMuted,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(6.dp))
+            // Anti-scalping info
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFFFFF7ED),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
                 Text(
-                    text = "Bảo vệ bởi Xác thực Sinh trắc học + Chữ ký số phần cứng ECDSA P-256 trong AndroidKeyStore. Sau khi chuyển, mã QR trên máy bạn sẽ bị thu hồi ngay lập tức.",
-                    fontSize = 11.sp,
-                    color = TextMuted,
-                    lineHeight = 16.sp
+                    "Vé ${ticket.ticketCode} đã chuyển $transferCount/2 lần. Mỗi vé chỉ được chuyển tối đa 2 lần để chống phe vé. " +
+                        "Sau khi chuyển, mã QR & NFC trên máy bạn bị thu hồi ngay (đổi seed TOTP + ký lại vé).",
+                    fontSize = 10.sp, color = Color(0xFF9A3412), lineHeight = 14.sp,
+                    modifier = Modifier.padding(10.dp)
                 )
+            }
 
-                Text(
-                    text = "Email người nhận",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF6F7788),
-                    modifier = Modifier.padding(top = 16.dp, bottom = 6.dp)
-                )
+            if (errorText != null) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp), color = Color(0xFFFEE2E2),
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
+                ) {
+                    Text(errorText!!, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFB91C1C), modifier = Modifier.padding(10.dp))
+                }
+            }
 
-                OutlinedTextField(
-                    value = recipientEmail,
-                    onValueChange = { recipientEmail = it },
-                    placeholder = { Text("friend@example.com") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp)
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Button(
-                    onClick = {
-                        if (recipientEmail.isBlank()) return@Button
-                        val cleanEmail = recipientEmail.trim()
-
-                        // Bước 1: Yêu cầu xác thực Vân tay / Mã khóa máy (Phase 2 FR-11)
-                        onRequireBiometric(
-                            "Xác nhận Chuyển nhượng Vé",
-                            "Xác thực danh tính để ký lệnh chuyển vé sang $cleanEmail"
-                        ) {
-                            isTransferring = true
-                            scope.launch {
-                                try {
-                                    // Bước 2: Ký số lệnh chuyển vé bằng Private Key trong AndroidKeyStore TEE (Phase 2 FR-09)
-                                    val clientNonce = UUID.randomUUID().toString().replace("-", "")
-                                    val timestamp = System.currentTimeMillis() / 1000L
-                                    val deviceSignature = withContext(Dispatchers.Default) {
-                                        KeystoreManager.signTransferPayload(
-                                            ticketId = ticket.id,
-                                            recipientEmail = cleanEmail,
-                                            nonce = clientNonce,
-                                            timestamp = timestamp
-                                        )
-                                    }
-
-                                    val api = ApiClient.getService(context)
-                                    val res = api.transferTicket(
-                                        TransferTicketRequest(
-                                            ticketId = ticket.id,
-                                            recipientEmail = cleanEmail,
-                                            clientNonce = clientNonce,
-                                            timestamp = timestamp,
-                                            deviceSignature = deviceSignature
-                                        )
-                                    )
-                                    if (res.isSuccessful && res.body()?.success == true) {
-                                        Toast.makeText(
-                                            context,
-                                            "Đã ký số phần cứng & chuyển nhượng vé thành công!",
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                        showTransferModal = false
-                                        onBack()
-                                    } else {
-                                        Toast.makeText(
-                                            context,
-                                            res.body()?.error ?: "Lỗi chuyển nhượng vé (${res.code()})",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
-                                } finally {
-                                    isTransferring = false
-                                }
+            when (step) {
+                // ---------- BƯỚC 1: Tra cứu người nhận ----------
+                1 -> {
+                    Text("Email tài khoản người nhận", fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                        color = Color(0xFF6F7788), modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
+                    OutlinedTextField(
+                        value = recipientEmail,
+                        onValueChange = { recipientEmail = it; errorText = null },
+                        placeholder = { Text("vd: friend@example.com") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "Hoàng Nam" to "friend@example.com",
+                            "Khánh Linh" to "linh.pham@secureticket.com",
+                            "Minh Khoa" to "minhkhoa.le@gmail.com"
+                        ).forEach { (label, mail) ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (recipientEmail.equals(mail, true)) Color(0xFFDBEAFE) else Color(0xFFF1F5F9),
+                                modifier = Modifier.clickable { recipientEmail = mail; errorText = null }
+                            ) {
+                                Text(
+                                    label, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                                    color = if (recipientEmail.equals(mail, true)) PrimaryBlue else TextDark,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                )
                             }
                         }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp),
-                    shape = RoundedCornerShape(15.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                    enabled = !isTransferring
-                ) {
-                    if (isTransferring) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-                    } else {
-                        Icon(Icons.Default.VerifiedUser, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Button(
+                        onClick = {
+                            val email = recipientEmail.trim().lowercase()
+                            if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                                errorText = "Email không hợp lệ."
+                                return@Button
+                            }
+                            isBusy = true
+                            scope.launch {
+                                try {
+                                    val res = ApiClient.getService(context)
+                                        .verifyRecipient(VerifyRecipientRequest(email, ticket.id))
+                                    val body = res.body()
+                                    if (res.isSuccessful && body?.success == true && body.data != null) {
+                                        if (!body.data.canTransfer) {
+                                            errorText = "Vé đã đạt giới hạn chuyển nhượng (${body.data.maxTransfers} lần)."
+                                        } else {
+                                            recipient = body.data
+                                            step = 2
+                                        }
+                                    } else {
+                                        errorText = parseError(res.errorBody()?.string()) ?: body?.error
+                                            ?: "Không tìm thấy người nhận (${res.code()})"
+                                    }
+                                } catch (e: Exception) {
+                                    errorText = "Lỗi kết nối: ${e.message}"
+                                } finally {
+                                    isBusy = false
+                                }
+                            }
+                        },
+                        enabled = !isBusy && recipientEmail.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(15.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                    ) {
+                        if (isBusy) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                        else Text("Tra cứu & xác minh người nhận", fontWeight = FontWeight.ExtraBold)
+                    }
+                }
+
+                // ---------- BƯỚC 2: Xác nhận danh tính + cảnh báo lừa đảo ----------
+                2 -> {
+                    val r = recipient!!
+                    GlassCard(
+                        modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        backgroundColor = Color(0xFFF0F7FF)
+                    ) {
+                        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier.size(44.dp).clip(CircleShape).background(PrimaryBlue),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    r.fullName.split(" ").filter { it.isNotBlank() }.takeLast(2)
+                                        .joinToString("") { it.first().uppercase() },
+                                    color = Color.White, fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(r.fullName, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
+                                Text(r.email, fontSize = 11.sp, color = TextMuted)
+                                Text("SĐT: ${r.phoneMasked ?: "Ẩn"}", fontSize = 11.sp, color = TextMuted)
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            StatusChip(if (r.kycVerified) "Tài khoản đã xác minh" else "Chưa xác minh", r.kycVerified)
+                            StatusChip(if (r.isDeviceBound) "Đã gắn thiết bị TEE" else "Chưa gắn thiết bị", r.isDeviceBound)
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp), color = Color(0xFFFEF2F2),
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                    ) {
                         Text(
-                            text = "Xác thực Vân tay & Ký số Chuyển vé",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.ExtraBold
+                            "⚠️ Cảnh báo lừa đảo: SecureTicket KHÔNG BAO GIỜ yêu cầu bạn chuyển vé để \"xác minh\", " +
+                                "\"nhận thưởng\" hay \"hoàn tiền\". Chỉ chuyển vé cho người bạn quen biết. Giao dịch không thể hoàn tác.",
+                            fontSize = 10.sp, color = Color(0xFF991B1B), lineHeight = 14.sp,
+                            modifier = Modifier.padding(10.dp)
                         )
+                    }
+
+                    CheckRow(confirmIdentity, { confirmIdentity = it },
+                        "Tôi xác nhận đúng người nhận là ${r.fullName}")
+                    CheckRow(confirmNoPayment, { confirmNoPayment = it },
+                        "Tôi không bị ai yêu cầu chuyển vé để nhận tiền/thưởng")
+
+                    Text("Nhập 4 ký tự cuối mã vé ($expectedCode) để xác nhận", fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold, color = Color(0xFF6F7788),
+                        modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
+                    OutlinedTextField(
+                        value = typedCode,
+                        onValueChange = { typedCode = it.uppercase().take(4) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    )
+
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = { step = 1; recipient = null; typedCode = ""; confirmIdentity = false; confirmNoPayment = false },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(15.dp)
+                        ) { Text("Quay lại") }
+                        Button(
+                            onClick = { errorText = null; step = 3 },
+                            enabled = confirmIdentity && confirmNoPayment && typedCode == expectedCode,
+                            modifier = Modifier.weight(1.6f).height(48.dp),
+                            shape = RoundedCornerShape(15.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                        ) { Text("Tiếp tục", fontWeight = FontWeight.ExtraBold) }
+                    }
+                }
+
+                // ---------- BƯỚC 3: Sinh trắc học + ký ECDSA trong TEE ----------
+                3 -> {
+                    val r = recipient!!
+                    if (resultMessage != null) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                modifier = Modifier.size(72.dp).clip(CircleShape).background(Color(0xFFDCFCE7)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Check, null, tint = Color(0xFF15803D), modifier = Modifier.size(40.dp))
+                            }
+                            Text("Đã chuyển vé cho ${r.fullName}", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
+                                color = TextDark, modifier = Modifier.padding(top = 12.dp))
+                            Text(resultMessage!!, fontSize = 11.sp, color = TextMuted,
+                                modifier = Modifier.padding(top = 6.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            Spacer(Modifier.height(18.dp))
+                            Button(
+                                onClick = onTransferred,
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                shape = RoundedCornerShape(15.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                            ) { Text("Xong", fontWeight = FontWeight.ExtraBold) }
+                        }
+                    } else {
+                        Text(
+                            "Lệnh chuyển sẽ được ký bằng khóa riêng ECDSA P-256 nằm trong chip bảo mật (không thể trích xuất), " +
+                                "kèm nonce dùng-một-lần và timestamp ±60s để chống phát lại.",
+                            fontSize = 11.sp, color = TextMuted, lineHeight = 16.sp,
+                            modifier = Modifier.padding(top = 14.dp)
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(10.dp), color = Color(0xFFF8FAFC),
+                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
+                        ) {
+                            Text(
+                                "TRANSFER:${ticket.id.take(8)}…:${r.email}:<nonce>:<ts>",
+                                fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = Color(0xFF334155),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                onRequireBiometric(
+                                    "Xác nhận chuyển nhượng vé",
+                                    "Ký lệnh chuyển vé ${ticket.ticketCode} cho ${r.fullName}"
+                                ) {
+                                    isBusy = true
+                                    errorText = null
+                                    scope.launch {
+                                        try {
+                                            val clientNonce = UUID.randomUUID().toString().replace("-", "")
+                                            val timestamp = System.currentTimeMillis() / 1000L
+                                            val sig = withContext(Dispatchers.Default) {
+                                                KeystoreManager.signTransferPayload(ticket.id, r.email, clientNonce, timestamp)
+                                            }
+                                            val res = ApiClient.getService(context).transferTicket(
+                                                TransferTicketRequest(
+                                                    ticketId = ticket.id,
+                                                    recipientEmail = r.email.lowercase(),
+                                                    clientNonce = clientNonce,
+                                                    timestamp = timestamp,
+                                                    deviceSignature = sig
+                                                )
+                                            )
+                                            if (res.isSuccessful && res.body()?.success == true) {
+                                                SecureTicketHceService.activeTicketId = null
+                                                // Xóa vé khỏi kho mã hóa cục bộ
+                                                try {
+                                                    val vault = com.example.quan_ly_ticket.data.local.EncryptedTicketVault(context)
+                                                    vault.saveTicketsEncrypted(vault.loadTicketsDecrypted().filter { it.id != ticket.id })
+                                                } catch (_: Exception) { }
+                                                resultMessage = "Chữ ký thiết bị hợp lệ · Server đã ký lại vé cho chủ mới và đổi seed QR. " +
+                                                    "Mã QR cũ trên máy bạn đã vô hiệu."
+                                            } else {
+                                                errorText = parseError(res.errorBody()?.string()) ?: res.body()?.error
+                                                    ?: "Lỗi chuyển nhượng (${res.code()})"
+                                            }
+                                        } catch (e: Exception) {
+                                            errorText = "Lỗi: ${e.message}"
+                                        } finally {
+                                            isBusy = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !isBusy,
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                            shape = RoundedCornerShape(15.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                        ) {
+                            if (isBusy) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                            else {
+                                Icon(Icons.Default.Fingerprint, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Xác thực vân tay & ký chuyển vé", fontWeight = FontWeight.ExtraBold)
+                            }
+                        }
+                        TextButton(onClick = { step = 2 }, enabled = !isBusy, modifier = Modifier.fillMaxWidth()) {
+                            Text("Quay lại")
+                        }
                     }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun StatusChip(label: String, ok: Boolean) {
+    Surface(shape = RoundedCornerShape(8.dp), color = if (ok) Color(0xFFDCFCE7) else Color(0xFFFEF3C7)) {
+        Text(label, fontSize = 9.sp, fontWeight = FontWeight.ExtraBold,
+            color = if (ok) Color(0xFF15803D) else Color(0xFF92400E),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+    }
+}
+
+@Composable
+private fun CheckRow(checked: Boolean, onChange: (Boolean) -> Unit, label: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        Text(label, fontSize = 11.sp, color = TextDark)
+    }
+}
+
+private fun parseError(raw: String?): String? = try {
+    if (raw.isNullOrBlank()) null
+    else com.google.gson.JsonParser.parseString(raw).asJsonObject.get("error")?.asString
+} catch (_: Exception) { null }

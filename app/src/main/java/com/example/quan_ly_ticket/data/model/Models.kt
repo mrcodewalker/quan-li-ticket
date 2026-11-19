@@ -88,7 +88,27 @@ data class Ticket(
     @SerializedName(value = "server_signature", alternate = ["serverSignature"]) val serverSignature: String = "",
     @SerializedName(value = "nonce") val nonce: String = "",
     @SerializedName(value = "qr_secret_seed", alternate = ["qrSecretSeed"]) val qrSecretSeed: String? = null,
-    @SerializedName(value = "device_bound_public_key", alternate = ["deviceBoundPublicKey"]) val deviceBoundPublicKey: String? = null
+    @SerializedName(value = "device_bound_public_key", alternate = ["deviceBoundPublicKey"]) val deviceBoundPublicKey: String? = null,
+    @SerializedName(value = "ticket_price", alternate = ["ticketPrice"]) val ticketPrice: Double? = null,
+    @SerializedName(value = "transfer_count", alternate = ["transferCount"]) val transferCount: Int? = 0
+)
+
+// --- Anti-scam: xác minh người nhận trước khi chuyển nhượng ---
+data class VerifyRecipientRequest(
+    @SerializedName("recipientEmail") val recipientEmail: String,
+    @SerializedName("ticketId") val ticketId: String? = null
+)
+
+data class RecipientVerifyData(
+    @SerializedName("recipientId") val recipientId: String,
+    @SerializedName("email") val email: String,
+    @SerializedName("fullName") val fullName: String,
+    @SerializedName("phoneMasked") val phoneMasked: String?,
+    @SerializedName("isDeviceBound") val isDeviceBound: Boolean = false,
+    @SerializedName("kycVerified") val kycVerified: Boolean = false,
+    @SerializedName("transferCount") val transferCount: Int = 0,
+    @SerializedName("maxTransfers") val maxTransfers: Int = 2,
+    @SerializedName("canTransfer") val canTransfer: Boolean = true
 )
 
 data class BuyTicketRequest(
@@ -102,6 +122,14 @@ data class BuyTicketRequest(
 // --- Queue / Virtual Waiting Room Models ---
 data class JoinQueueRequest(
     @SerializedName("eventId") val eventId: String
+)
+
+data class LeaveQueueRequest(
+    @SerializedName("queueId") val queueId: String
+)
+
+data class CancelOrderRequest(
+    @SerializedName("orderId") val orderId: String
 )
 
 data class QueueData(

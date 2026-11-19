@@ -297,9 +297,9 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Demo Shortcut Buttons
+            // Demo Shortcut Buttons (3 Khách hàng test Chuyển vé & Hàng đợi + Staff + BTC)
             Text(
-                text = "Tài khoản mẫu kiểm thử nhanh:",
+                text = "Tài khoản mẫu kiểm thử nhanh (Mật khẩu: SecureTicket@2026):",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 color = TextMuted
@@ -307,7 +307,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 OutlinedButton(
                     onClick = {
@@ -318,9 +318,38 @@ fun LoginScreen(
                     shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
                 ) {
-                    Text("Khách hàng", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("KH A (Minh Anh)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
 
+                OutlinedButton(
+                    onClick = {
+                        email = "friend@example.com"
+                        password = "SecureTicket@2026"
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                ) {
+                    Text("KH B (Hoàng Nam)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        email = "linh.pham@secureticket.com"
+                        password = "SecureTicket@2026"
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                ) {
+                    Text("KH C (Khánh Linh)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedButton(
                     onClick = {
                         email = "staff@secureticket.com"
@@ -330,7 +359,7 @@ fun LoginScreen(
                     shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
                 ) {
-                    Text("Nhân viên Soát vé", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Nhân viên Soát vé (Staff)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
 
                 OutlinedButton(
@@ -342,7 +371,7 @@ fun LoginScreen(
                     shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
                 ) {
-                    Text("Ban tổ chức", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Ban tổ chức (Organizer)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
 

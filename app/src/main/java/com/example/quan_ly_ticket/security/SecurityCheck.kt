@@ -21,6 +21,24 @@ import java.security.MessageDigest
  */
 object SecurityCheck {
 
+    @Volatile
+    var isClockTampered: Boolean = false
+        private set
+
+    @Volatile
+    var lastClockDriftSeconds: Long = 0L
+        private set
+
+    /**
+     * Chống gian lận thời gian (Anti-Time-Cheat):
+     * So sánh đồng hồ thiết bị với HTTP Date Header từ Server để phát hiện chỉnh lùi giờ kéo dài hạn QR TOTP.
+     */
+    fun recordServerTimeDrift(serverEpochMillis: Long) {
+        val driftSec = kotlin.math.abs((System.currentTimeMillis() - serverEpochMillis) / 1000L)
+        lastClockDriftSeconds = driftSec
+        isClockTampered = driftSec > 120L
+    }
+
     data class SecurityStatus(
         val isRooted: Boolean,
         val isDebuggerAttached: Boolean,
@@ -42,7 +60,7 @@ object SecurityCheck {
 
         val isDebugger = Debug.isDebuggerConnected() || Debug.waitingForDebugger()
         val isEmulator = checkIsEmulator()
-        val isFrida = checkFridaOrXposedMemoryMaps()
+        val isFrida = checkFridaOrXposedMemoryMaps() || checkFridaTcpPorts()
         val apkSig = getApkSignatureSha256(context)
         val isSigValid = apkSig.isNotBlank() && apkSig != "UNSIGNED_OR_ERROR"
 
@@ -78,6 +96,28 @@ object SecurityCheck {
                         lower.contains("substrate") ||
                         lower.contains("libgadget.so")
                     ) {
+                        return true
+                    }
+                }
+            }
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Quét /proc/net/tcp tìm cổng mặc định của frida-server (27042 = 0x69A2, 27043 = 0x69A3)
+     */
+    private fun checkFridaTcpPorts(): Boolean {
+        return try {
+            val tcpFile = File("/proc/net/tcp")
+            if (!tcpFile.exists()) return false
+            BufferedReader(FileReader(tcpFile)).use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    val upper = line!!.uppercase()
+                    if (upper.contains(":69A2 ") || upper.contains(":69A3 ")) {
                         return true
                     }
                 }

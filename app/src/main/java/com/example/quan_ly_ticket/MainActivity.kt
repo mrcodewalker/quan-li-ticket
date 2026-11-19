@@ -23,8 +23,15 @@ import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.CreateOrderData
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.security.SecurityCheck
+import com.example.quan_ly_ticket.ui.components.BiometricAuthDialog
 import com.example.quan_ly_ticket.ui.screens.*
 import com.example.quan_ly_ticket.ui.theme.SecureTicketTheme
+
+private data class PendingBiometricRequest(
+    val title: String,
+    val subtitle: String,
+    val onVerified: () -> Unit
+)
 
 enum class Screen {
     LOGIN,
@@ -68,6 +75,16 @@ class MainActivity : FragmentActivity() {
                     }
                     var selectedTicket by remember { mutableStateOf<Ticket?>(null) }
                     var activeOrder by remember { mutableStateOf<CreateOrderData?>(null) }
+                    var pendingBiometric by remember { mutableStateOf<PendingBiometricRequest?>(null) }
+                    val hasHardwareBiometric = remember {
+                        BiometricManager.from(this@MainActivity).canAuthenticate(
+                            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                        ) == BiometricManager.BIOMETRIC_SUCCESS
+                    }
+
+                    fun requestBiometricAuth(title: String, subtitle: String, onVerified: () -> Unit) {
+                        pendingBiometric = PendingBiometricRequest(title, subtitle, onVerified)
+                    }
 
                     Column(modifier = Modifier.fillMaxSize()) {
                         // Phase 3 (FR-19): Adaptive RASP Security Banner khi phát hiện môi trường rủi ro trên bản Release
@@ -94,17 +111,16 @@ class MainActivity : FragmentActivity() {
                                         currentScreen = Screen.HOME
                                     },
                                     onTriggerBiometric = {
-                                        showBiometricPrompt(
+                                        requestBiometricAuth(
                                             title = "Xác thực mở Ví vé SecureTicket",
-                                            subtitle = "Sử dụng vân tay hoặc mã khóa màn hình để xác nhận danh tính",
-                                            allowEmulatorFallback = false
+                                            subtitle = "Quét Face ID, Vân tay hoặc dùng cảm biến sinh trắc học thiết bị"
                                         ) {
                                             if (!securePrefs.getAccessToken().isNullOrEmpty()) {
                                                 currentScreen = Screen.HOME
                                             } else {
                                                 Toast.makeText(
                                                     this@MainActivity,
-                                                    "Chưa lưu phiên đăng nhập. Vui lòng đăng nhập bằng mật khẩu lần đầu.",
+                                                    "Xác thực sinh trắc học thành công! Hãy đăng nhập mật khẩu lần đầu để tạo phiên.",
                                                     Toast.LENGTH_SHORT
                                                 ).show()
                                             }
@@ -128,12 +144,7 @@ class MainActivity : FragmentActivity() {
                                         currentScreen = Screen.CRYPTO_LAB
                                     },
                                     onRequireBiometric = { title, subtitle, onVerified ->
-                                        showBiometricPrompt(
-                                            title = title,
-                                            subtitle = subtitle,
-                                            allowEmulatorFallback = true,
-                                            onSuccess = onVerified
-                                        )
+                                        requestBiometricAuth(title, subtitle, onVerified)
                                     },
                                     onLogout = {
                                         currentScreen = Screen.LOGIN
@@ -162,12 +173,7 @@ class MainActivity : FragmentActivity() {
                                         TicketDetailScreen(
                                             ticket = ticket,
                                             onRequireBiometric = { title, subtitle, onVerified ->
-                                                showBiometricPrompt(
-                                                    title = title,
-                                                    subtitle = subtitle,
-                                                    allowEmulatorFallback = true,
-                                                    onSuccess = onVerified
-                                                )
+                                                requestBiometricAuth(title, subtitle, onVerified)
                                             },
                                             onBack = { currentScreen = Screen.HOME }
                                         )
@@ -185,6 +191,35 @@ class MainActivity : FragmentActivity() {
                                 )
                             }
                         }
+                    }
+
+                    // Hộp thoại Giả lập Quét Face ID / Vân tay & Biometric hệ thống
+                    pendingBiometric?.let { req ->
+                        BiometricAuthDialog(
+                            title = req.title,
+                            subtitle = req.subtitle,
+                            hasHardwareBiometric = hasHardwareBiometric,
+                            onUseSystemBiometric = {
+                                val callback = req.onVerified
+                                val t = req.title
+                                val s = req.subtitle
+                                pendingBiometric = null
+                                showBiometricPrompt(
+                                    title = t,
+                                    subtitle = s,
+                                    allowEmulatorFallback = false,
+                                    onSuccess = callback
+                                )
+                            },
+                            onSuccess = {
+                                val callback = req.onVerified
+                                pendingBiometric = null
+                                callback()
+                            },
+                            onDismiss = {
+                                pendingBiometric = null
+                            }
+                        )
                     }
                 }
             }
