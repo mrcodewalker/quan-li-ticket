@@ -36,6 +36,8 @@ private data class PendingBiometricRequest(
 enum class Screen {
     LOGIN,
     HOME,
+    STAFF_DASHBOARD,
+    ORGANIZER_DASHBOARD,
     TICKET_DETAIL,
     SCANNER,
     CRYPTO_LAB,
@@ -68,9 +70,17 @@ class MainActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
+                    fun homeScreenForRole(role: String? = securePrefs.getUserRole()): Screen {
+                        return when (role?.uppercase()) {
+                            "STAFF" -> Screen.STAFF_DASHBOARD
+                            "ORGANIZER", "ADMIN" -> Screen.ORGANIZER_DASHBOARD
+                            else -> Screen.HOME
+                        }
+                    }
+
                     var currentScreen by remember {
                         mutableStateOf(
-                            if (securePrefs.getAccessToken().isNullOrEmpty()) Screen.LOGIN else Screen.HOME
+                            if (securePrefs.getAccessToken().isNullOrEmpty()) Screen.LOGIN else homeScreenForRole()
                         )
                     }
                     var selectedTicket by remember { mutableStateOf<Ticket?>(null) }
@@ -107,8 +117,8 @@ class MainActivity : FragmentActivity() {
                         Box(modifier = Modifier.weight(1f)) {
                             when (currentScreen) {
                                 Screen.LOGIN -> LoginScreen(
-                                    onLoginSuccess = { _ ->
-                                        currentScreen = Screen.HOME
+                                    onLoginSuccess = { role ->
+                                        currentScreen = homeScreenForRole(role)
                                     },
                                     onTriggerBiometric = {
                                         requestBiometricAuth(
@@ -116,7 +126,7 @@ class MainActivity : FragmentActivity() {
                                             subtitle = "Quét Face ID, Vân tay hoặc dùng cảm biến sinh trắc học thiết bị"
                                         ) {
                                             if (!securePrefs.getAccessToken().isNullOrEmpty()) {
-                                                currentScreen = Screen.HOME
+                                                currentScreen = homeScreenForRole()
                                             } else {
                                                 Toast.makeText(
                                                     this@MainActivity,
@@ -126,6 +136,21 @@ class MainActivity : FragmentActivity() {
                                             }
                                         }
                                     }
+                                )
+
+                                Screen.STAFF_DASHBOARD -> StaffDashboardScreen(
+                                    onOpenScanner = { currentScreen = Screen.SCANNER },
+                                    onOpenCryptoLab = { currentScreen = Screen.CRYPTO_LAB },
+                                    onLogout = { currentScreen = Screen.LOGIN }
+                                )
+
+                                Screen.ORGANIZER_DASHBOARD -> OrganizerDashboardScreen(
+                                    onOpenScanner = { currentScreen = Screen.SCANNER },
+                                    onOpenCryptoLab = { currentScreen = Screen.CRYPTO_LAB },
+                                    onRequireBiometric = { title, subtitle, onVerified ->
+                                        requestBiometricAuth(title, subtitle, onVerified)
+                                    },
+                                    onLogout = { currentScreen = Screen.LOGIN }
                                 )
 
                                 Screen.HOME -> HomeScreen(
@@ -183,11 +208,11 @@ class MainActivity : FragmentActivity() {
                                 }
 
                                 Screen.SCANNER -> ScannerScreen(
-                                    onBack = { currentScreen = Screen.HOME }
+                                    onBack = { currentScreen = homeScreenForRole() }
                                 )
 
                                 Screen.CRYPTO_LAB -> CryptoLabScreen(
-                                    onBack = { currentScreen = Screen.HOME }
+                                    onBack = { currentScreen = homeScreenForRole() }
                                 )
                             }
                         }

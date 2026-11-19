@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../config/db.js';
-import { authenticateToken, getClientInfo } from '../middlewares/authMiddleware.js';
+import { authenticateToken, authorizeRoles, getClientInfo } from '../middlewares/authMiddleware.js';
 import { createRateLimiter, validateRequestSchema, consumeClientNonce } from '../middlewares/securityMiddleware.js';
 import {
   signPayload,
@@ -637,5 +637,49 @@ router.post(
     }
   }
 );
+
+/**
+ * Thu hồi vé gian lận / phe vé tức thì (RBAC: ORGANIZER, ADMIN)
+ * POST /api/tickets/:id/revoke
+ */
+router.post('/:id/revoke', authenticateToken, authorizeRoles('ORGANIZER', 'ADMIN'), async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body || {};
+  const { ip, userAgent } = getClientInfo(req);
+
+  try {
+    const [rows] = await pool.execute('SELECT id, ticket_code, status FROM tickets WHERE id = ?', [id]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Không tìm thấy vé.' });
+    }
+    if (rows[0].status === 'REVOKED') {
+      return res.status(400).json({ success: false, error: 'Vé này đã bị thu hồi trước đó.' });
+    }
+
+    // Thu hồi vé & xoay đổi qr_secret_seed để vô hiệu hóa hoàn toàn mọi mã QR hiện tại
+    const deadSeed = generateSecureNonce(32);
+    await pool.execute(
+      "UPDATE tickets SET status = 'REVOKED', qr_secret_seed = ? WHERE id = ?",
+      [deadSeed, id]
+    );
+
+    await logSecurityEvent({
+      userId: req.user.id,
+      action: 'TICKET_REVOKED_BY_ORGANIZER',
+      severity: 'HIGH',
+      ipAddress: ip,
+      userAgent,
+      details: { ticketId: id, ticketCode: rows[0].ticket_code, reason: reason || 'Nghi vấn phe vé / gian lận' }
+    });
+
+    res.json({
+      success: true,
+      message: `Đã thu hồi vé ${rows[0].ticket_code} và vô hiệu hóa mã QR tức thì.`
+    });
+  } catch (error) {
+    console.error('[Tickets] Revoke error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
 
 export default router;

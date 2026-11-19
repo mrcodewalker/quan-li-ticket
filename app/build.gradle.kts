@@ -59,8 +59,9 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
 
-    // QR Generation
+    // QR Generation & Real Camera QR Scanner
     implementation(libs.zxing.core)
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     // Jetpack Compose
     implementation(libs.androidx.activity.compose)

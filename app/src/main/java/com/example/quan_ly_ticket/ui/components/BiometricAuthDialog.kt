@@ -163,17 +163,13 @@ fun BiometricAuthDialog(
                 .fillMaxWidth(0.9f)
                 .clip(RoundedCornerShape(28.dp)),
             shape = RoundedCornerShape(28.dp),
-            color = Color(0xFF0F172A),
-            shadowElevation = 18.dp
+            color = Color.White,
+            shadowElevation = 14.dp
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color(0xFF0F172A), Color(0xFF1E293B))
-                        )
-                    )
+                    .background(Color.White)
                     .padding(22.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -187,14 +183,14 @@ fun BiometricAuthDialog(
                         Icon(
                             imageVector = Icons.Default.VerifiedUser,
                             contentDescription = null,
-                            tint = Color(0xFF38BDF8),
+                            tint = PrimaryBlue,
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
                             text = "BIOMETRIC TEE AUTH",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFF94A3B8),
+                            color = PrimaryBlue,
                             letterSpacing = 1.sp
                         )
                     }
@@ -202,7 +198,7 @@ fun BiometricAuthDialog(
                         onClick = { if (scanState != ScanState.SCANNING) onDismiss() },
                         modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Đóng", tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Close, contentDescription = "Đóng", tint = TextMuted, modifier = Modifier.size(18.dp))
                     }
                 }
 
@@ -212,13 +208,13 @@ fun BiometricAuthDialog(
                     text = title,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    color = Color.White,
+                    color = TextDark,
                     textAlign = TextAlign.Center
                 )
                 Text(
                     text = subtitle,
                     fontSize = 11.sp,
-                    color = Color(0xFFCBD5E1),
+                    color = TextMuted,
                     textAlign = TextAlign.Center,
                     lineHeight = 16.sp,
                     modifier = Modifier.padding(top = 4.dp)
@@ -231,7 +227,7 @@ fun BiometricAuthDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF0B1120))
+                        .background(Color(0xFFF1F5F9))
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -250,8 +246,8 @@ fun BiometricAuthDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Default.Face, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Text("Face ID", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Icon(Icons.Default.Face, null, tint = if (isFace) Color.White else TextMuted, modifier = Modifier.size(16.dp))
+                            Text("Face ID", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (isFace) Color.White else TextMuted)
                         }
                     }
 
@@ -269,8 +265,8 @@ fun BiometricAuthDialog(
                         contentAlignment = Alignment.Center
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Default.Fingerprint, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Text("Vân tay", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            Icon(Icons.Default.Fingerprint, null, tint = if (!isFace) Color.White else TextMuted, modifier = Modifier.size(16.dp))
+                            Text("Vân tay", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (!isFace) Color.White else TextMuted)
                         }
                     }
                 }
@@ -362,9 +358,9 @@ fun BiometricAuthDialog(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = when (scanState) {
-                        ScanState.SUCCESS -> Color(0xFF6EE7B7)
-                        ScanState.FAILED -> Color(0xFFFCA5A5)
-                        else -> Color(0xFFE2E8F0)
+                        ScanState.SUCCESS -> Color(0xFF059669)
+                        ScanState.FAILED -> Color(0xFFDC2626)
+                        else -> TextMuted
                     },
                     textAlign = TextAlign.Center,
                     lineHeight = 17.sp
@@ -406,9 +402,9 @@ fun BiometricAuthDialog(
                             enabled = scanState != ScanState.SCANNING,
                             modifier = Modifier.weight(1f).height(40.dp),
                             shape = RoundedCornerShape(12.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCBD5E1))
                         ) {
-                            Text("Cảm biến thật", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF93C5FD))
+                            Text("Cảm biến thật", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = PrimaryBlue)
                         }
                     }
 
@@ -417,9 +413,9 @@ fun BiometricAuthDialog(
                         enabled = scanState != ScanState.SCANNING && scanState != ScanState.SUCCESS,
                         modifier = Modifier.weight(1f).height(40.dp),
                         shape = RoundedCornerShape(12.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF7F1D1D))
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFCA5A5))
                     ) {
-                        Text("Thử quét sai", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFCA5A5))
+                        Text("Thử quét sai", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFDC2626))
                     }
                 }
             }

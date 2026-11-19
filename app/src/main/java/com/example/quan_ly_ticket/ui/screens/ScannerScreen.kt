@@ -2,8 +2,11 @@ package com.example.quan_ly_ticket.ui.screens
 
 import android.app.Activity
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -83,7 +86,11 @@ fun ScannerScreen(
                     validationResult = Pair(true, res.body()?.message ?: "Vé hợp lệ!")
                     verifiedData = res.body()?.data
                 } else {
-                    val errMsg = res.body()?.error ?: "Xác thực thất bại (${res.code()})"
+                    val rawErr = res.errorBody()?.string()
+                    val parsedErr = try {
+                        if (!rawErr.isNullOrBlank()) com.google.gson.JsonParser.parseString(rawErr).asJsonObject.get("error")?.asString else null
+                    } catch (_: Exception) { null }
+                    val errMsg = parsedErr ?: res.body()?.error ?: "Xác thực thất bại (${res.code()})"
                     validationResult = Pair(false, errMsg)
                 }
             } catch (e: Exception) {
@@ -92,6 +99,25 @@ fun ScannerScreen(
                 isValidating = false
             }
         }
+    }
+
+    // Real Camera QR Scanner Launcher (ZXing Barcode Scanner)
+    val qrScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        if (result.contents != null) {
+            manualQrInput = result.contents
+            processValidation(result.contents)
+        }
+    }
+
+    fun launchRealCameraScanner() {
+        val options = ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt("Đưa mã QR động trên điện thoại khách vào khung quét")
+            setBeepEnabled(true)
+            setOrientationLocked(false)
+            setTorchEnabled(isFlashOn)
+        }
+        qrScanLauncher.launch(options)
     }
 
     // Animated laser scan line for the camera viewfinder
@@ -217,14 +243,11 @@ fun ScannerScreen(
 
                 Spacer(modifier = Modifier.height(28.dp))
 
-                // Viewfinder Frame (278x278 dp) with corner brackets and laser line
+                // Viewfinder Frame (278x278 dp) — Chạm để mở Camera Quét QR Thật
                 Box(
                     modifier = Modifier
                         .size(278.dp)
-                        .clickable {
-                            // Quick simulation or manual QR paste
-                            showManualInput = !showManualInput
-                        },
+                        .clickable { launchRealCameraScanner() },
                     contentAlignment = Alignment.Center
                 ) {
                     // Top-Left bracket
@@ -298,7 +321,35 @@ fun ScannerScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Real Camera Scan CTA + Manual Input Toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = { launchRealCameraScanner() },
+                        enabled = !isValidating,
+                        modifier = Modifier.weight(1.4f).height(46.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+                    ) {
+                        Icon(Icons.Default.QrCodeScanner, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Mở Camera Quét QR", fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+                    }
+                    OutlinedButton(
+                        onClick = { showManualInput = !showManualInput },
+                        modifier = Modifier.weight(1f).height(46.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                    ) {
+                        Text("Dán mã QR", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFCBD5E1))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Validation Status Indicators
                 if (!isSuccess && !isError) {
@@ -314,7 +365,7 @@ fun ScannerScreen(
                                 .shadow(6.dp, CircleShape, ambientColor = Color(0xFF6B8CFF), spotColor = Color(0xFF6B8CFF))
                         )
                         Text(
-                            text = if (isValidating) "Đang xác thực chữ ký số..." else "Camera đang hoạt động (Chạm để nhập mã)",
+                            text = if (isValidating) "Đang xác thực ECDSA & TOTP trên server..." else "Sẵn sàng quét vé khách bằng Camera hoặc NFC",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFFCBD5E1)

@@ -233,3 +233,94 @@ data class ServerCryptoData(
     @SerializedName("publicKeyPem") val publicKeyPem: String,
     @SerializedName("publicKeyBase64") val publicKeyBase64: String
 )
+
+// --- Staff Check-in Logs & Stats ---
+data class ValidationStats(
+    @SerializedName("totalScans") val totalScans: Int = 0,
+    @SerializedName("successCount") val successCount: Int = 0,
+    @SerializedName("replayBlockedCount") val replayBlockedCount: Int = 0,
+    @SerializedName("rejectedCount") val rejectedCount: Int = 0
+)
+
+data class ValidationLogItem(
+    @SerializedName("id") val id: String = "",
+    @SerializedName("ticket_code") val ticketCode: String? = null,
+    @SerializedName("event_title") val eventTitle: String? = null,
+    @SerializedName("owner_name") val ownerName: String? = null,
+    @SerializedName("method") val method: String? = "QR_ROTATING",
+    @SerializedName("result") val result: String? = "SUCCESS",
+    @SerializedName("notes") val notes: String? = null,
+    @SerializedName("scanned_at") val scannedAt: String? = null
+)
+
+data class ValidationLogsResponse(
+    @SerializedName("stats") val stats: ValidationStats = ValidationStats(),
+    @SerializedName("logs") val logs: List<ValidationLogItem> = emptyList()
+)
+
+// --- Organizer Dashboard, Event Management, Ticket Revocation & SIEM Audit Logs ---
+data class OrganizerSummary(
+    @SerializedName("totalRevenue") val totalRevenue: Double = 0.0,
+    @SerializedName("paidOrders") val paidOrders: Int = 0,
+    @SerializedName("totalIssued") val totalIssued: Int = 0,
+    @SerializedName("activeTickets") val activeTickets: Int = 0,
+    @SerializedName("checkedInTickets") val checkedInTickets: Int = 0,
+    @SerializedName("revokedTickets") val revokedTickets: Int = 0,
+    @SerializedName("securityAlerts") val securityAlerts: Int = 0
+)
+
+data class OrganizerEventItem(
+    @SerializedName("id") val id: String = "",
+    @SerializedName("title") val title: String = "",
+    @SerializedName("location") val location: String = "",
+    @SerializedName("start_time") val startTime: String = "",
+    @SerializedName("total_tickets") val totalTickets: Int = 0,
+    @SerializedName("available_tickets") val availableTickets: Int = 0,
+    @SerializedName("ticket_price") val ticketPrice: Double = 0.0,
+    @SerializedName("status") val status: String = "UPCOMING",
+    @SerializedName("issued_count") val issuedCount: Int = 0,
+    @SerializedName("used_count") val usedCount: Int = 0
+)
+
+data class OrganizerTicketItem(
+    @SerializedName("id") val id: String = "",
+    @SerializedName("ticket_code") val ticketCode: String = "",
+    @SerializedName("status") val status: String = "ACTIVE",
+    @SerializedName("issued_at") val issuedAt: String? = null,
+    @SerializedName("event_title") val eventTitle: String? = null,
+    @SerializedName("owner_name") val ownerName: String? = null,
+    @SerializedName("owner_email") val ownerEmail: String? = null
+)
+
+data class OrganizerDashboardData(
+    @SerializedName("summary") val summary: OrganizerSummary = OrganizerSummary(),
+    @SerializedName("events") val events: List<OrganizerEventItem> = emptyList(),
+    @SerializedName("recentTickets") val recentTickets: List<OrganizerTicketItem> = emptyList()
+)
+
+data class SecurityAuditLogItem(
+    @SerializedName("id") val id: String = "",
+    @SerializedName("action") val action: String = "",
+    @SerializedName("severity") val severity: String = "INFO",
+    @SerializedName("ip_address") val ipAddress: String? = null,
+    @SerializedName("details") val details: Any? = null,
+    @SerializedName("created_at") val createdAt: String? = null
+)
+
+data class CreateEventRequest(
+    @SerializedName("title") val title: String,
+    @SerializedName("description") val description: String,
+    @SerializedName("location") val location: String,
+    @SerializedName("startTime") val startTime: String,
+    @SerializedName("endTime") val endTime: String,
+    @SerializedName("totalTickets") val totalTickets: Int,
+    @SerializedName("ticketPrice") val ticketPrice: Double
+)
+
+data class UpdateEventStatusRequest(
+    @SerializedName("status") val status: String
+)
+
+data class RevokeTicketRequest(
+    @SerializedName("reason") val reason: String
+)

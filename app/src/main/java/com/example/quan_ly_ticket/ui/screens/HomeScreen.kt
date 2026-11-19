@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -26,6 +27,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quan_ly_ticket.data.api.ApiClient
@@ -41,10 +43,15 @@ import com.example.quan_ly_ticket.data.model.RefreshTokenRequest
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.security.KeystoreManager
 import com.example.quan_ly_ticket.security.SecurityCheck
+import com.example.quan_ly_ticket.ui.components.EventCardSkeleton
+import com.example.quan_ly_ticket.ui.components.EventCoverImage
 import com.example.quan_ly_ticket.ui.components.GlassCard
 import com.example.quan_ly_ticket.ui.components.NavigationTab
 import com.example.quan_ly_ticket.ui.components.PremiumPillSwitch
 import com.example.quan_ly_ticket.ui.components.SecureBottomNav
+import com.example.quan_ly_ticket.ui.components.TicketCardSkeleton
+import com.example.quan_ly_ticket.ui.components.TicketStubCard
+import com.example.quan_ly_ticket.ui.components.rememberShimmerBrush
 import com.example.quan_ly_ticket.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -74,7 +81,6 @@ fun HomeScreen(
     var events by remember { mutableStateOf<List<Event>>(emptyList()) }
     var myTickets by remember { mutableStateOf<List<Ticket>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
-    var showAllEvents by remember { mutableStateOf(true) }
     var incomingTicketBanner by remember { mutableStateOf<Ticket?>(null) }
     var waitingQueueEventId by remember { mutableStateOf<String?>(null) }
     var waitingQueueData by remember { mutableStateOf<QueueData?>(null) }
@@ -227,48 +233,15 @@ fun HomeScreen(
                 when (currentTab) {
                     NavigationTab.HOME -> HomeMainView(
                         userName = userName,
+                        userRole = userRole,
                         ticketCount = myTickets.count { it.status == "ACTIVE" || it.status == null },
                         events = events,
-                        showAllEvents = showAllEvents,
-                        onToggleShowAll = { showAllEvents = !showAllEvents },
+                        isLoading = isLoading,
+                        onRefresh = { refreshData() },
                         onOpenSettings = { currentTab = NavigationTab.SETTINGS },
                         onOpenTickets = { currentTab = NavigationTab.TICKETS },
                         onOpenScanner = onOpenScanner,
-                        onSelectFeaturedEvent = {
-                            val activeTicket = myTickets.firstOrNull { it.status == "ACTIVE" || it.status == null }
-                            if (activeTicket != null) {
-                                onSelectTicket(activeTicket)
-                            } else {
-                                val feat = events.firstOrNull()
-                                if (feat != null) {
-                                    scope.launch {
-                                        try {
-                                            val api = ApiClient.getService(context)
-                                            val res = api.createPaymentOrder(CreateOrderRequest(feat.id))
-                                            if (res.isSuccessful && res.body()?.success == true && res.body()?.data != null) {
-                                                onProceedToPayment(res.body()!!.data!!)
-                                            } else {
-                                                Toast.makeText(context, res.body()?.error ?: "Lỗi tạo đơn đặt vé", Toast.LENGTH_SHORT).show()
-                                            }
-                                        } catch (e: Exception) {
-                                            Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                } else {
-                                    // Default preview ticket
-                                    onSelectTicket(
-                                        Ticket(
-                                            id = "TKT-PREMIUM-001",
-                                            ticketCode = "SEC-P12-2026",
-                                            eventTitle = "SecureFest Vietnam 2026",
-                                            eventLocation = "SECC · Hall A",
-                                            eventStartTime = "14.11.2026 · 18:30",
-                                            status = "ACTIVE"
-                                        )
-                                    )
-                                }
-                            }
-                        },
+                        onOpenCryptoLab = onOpenCryptoLab,
                         onBuyEvent = { eventId ->
                             onRequireBiometric(
                                 "Xác nhận Đặt mua Vé",
@@ -300,6 +273,8 @@ fun HomeScreen(
 
                     NavigationTab.TICKETS -> TicketsWalletView(
                         tickets = myTickets,
+                        isLoading = isLoading,
+                        onRefresh = { refreshData() },
                         onSelectTicket = onSelectTicket
                     )
 
@@ -462,34 +437,52 @@ fun HomeScreen(
 }
 
 /**
- * TAB 1: Trang chủ (Main.dc.html)
+ * TAB 1: Khám phá sự kiện — Editorial layout với Spotlight Carousel, Shimmer Skeleton & Date Tile
  */
 @Composable
 private fun HomeMainView(
     userName: String,
+    userRole: String,
     ticketCount: Int,
     events: List<Event>,
-    showAllEvents: Boolean,
-    onToggleShowAll: () -> Unit,
+    isLoading: Boolean,
+    onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTickets: () -> Unit,
     onOpenScanner: () -> Unit,
-    onSelectFeaturedEvent: () -> Unit,
+    onOpenCryptoLab: () -> Unit,
     onBuyEvent: (String) -> Unit
 ) {
+    val isStaffOrOrganizer = userRole.uppercase() in listOf("STAFF", "ORGANIZER", "ADMIN")
+    var selectedCategory by remember { mutableStateOf("Tất cả") }
+    val filteredEvents = remember(events, selectedCategory) {
+        if (selectedCategory == "Tất cả") events
+        else events.filter { ev ->
+            val desc = (ev.description ?: "") + " " + ev.title
+            when (selectedCategory) {
+                "Âm nhạc" -> desc.contains("ÂM NHẠC", true) || desc.contains("LIVE SHOW", true) || desc.contains("LỄ HỘI", true) || desc.contains("Concert", true)
+                "An toàn TT" -> desc.contains("AN TOÀN", true) || desc.contains("Security", true) || desc.contains("KMA", true)
+                "Esports & Tech" -> desc.contains("ESPORTS", true) || desc.contains("CÔNG NGHỆ", true) || desc.contains("Google", true)
+                else -> true
+            }
+        }
+    }
+
+    val initials = remember(userName) {
+        userName.split(" ").filter { it.isNotBlank() }.takeLast(2)
+            .joinToString("") { it.first().uppercase() }.ifBlank { "ST" }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 20.dp, vertical = 14.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        // Status bar space filler
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Header: Greeting + Avatar Button
+        // 1. Editorial Top Header
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -497,466 +490,416 @@ private fun HomeMainView(
                 Text(
                     text = "Xin chào,",
                     fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Medium,
                     color = TextMuted
                 )
                 Text(
                     text = userName,
-                    fontSize = 23.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = (-0.5).sp,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = (-0.6).sp,
                     color = TextDark
                 )
             }
 
-            // Avatar / Settings button
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color.White.copy(alpha = 0.85f))
-                    .border(1.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(16.dp))
-                    .shadow(elevation = 6.dp, shape = RoundedCornerShape(16.dp))
-                    .clickable { onOpenSettings() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = "Cài đặt",
-                    tint = PrimaryBlue,
-                    modifier = Modifier.size(22.dp)
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White)
+                        .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
+                        .clickable { onRefresh() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = PrimaryNavy)
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = "Tải lại", tint = TextDark, modifier = Modifier.size(19.dp))
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(PrimaryNavy)
+                        .clickable { onOpenSettings() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(initials, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                }
             }
         }
 
-        // Section: VÍ VÉ AN TOÀN Card
-        Box(
+        // 2. Role-Based Card (RBAC): Nhân viên thấy Cổng Soát Vé; Khách hàng thấy Ví vé & Bảo mật (không thấy nút soát vé!)
+        GlassCard(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(25.dp))
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(PrimaryNavy, Color(0xFF2644A8))
-                    )
-                )
-                .shadow(elevation = 16.dp, shape = RoundedCornerShape(25.dp), ambientColor = Color(0x3D203E9A), spotColor = Color(0x3D203E9A))
-                .padding(20.dp)
+                .padding(horizontal = 20.dp),
+            shape = RoundedCornerShape(18.dp)
         ) {
-            // Background decorative circles matching preview
-            Box(
-                modifier = Modifier
-                    .size(150.dp)
-                    .offset(x = 180.dp, y = (-78).dp)
-                    .clip(CircleShape)
-                    .background(SecondaryBlue.copy(alpha = 0.5f))
-            )
-            Box(
-                modifier = Modifier
-                    .size(90.dp)
-                    .offset(x = 130.dp, y = 50.dp)
-                    .border(18.dp, Color.White.copy(alpha = 0.08f), CircleShape)
-            )
-
-            Column(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Column {
-                        Text(
-                            text = "VÍ VÉ AN TOÀN",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFD8E1FF),
-                            letterSpacing = 0.7.sp
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = if (ticketCount > 0) "$ticketCount vé" else "2 vé",
-                            fontSize = 29.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color.White
-                        )
-                        Text(
-                            text = "Đã mã hóa trên thiết bị",
-                            fontSize = 12.sp,
-                            color = Color(0xFFD8E1FF)
-                        )
-                    }
-
-                    // Ticket icon in glass container
-                    Box(
-                        modifier = Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color.White.copy(alpha = 0.14f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ConfirmationNumber,
-                            contentDescription = "Ticket",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Verification indicator pill
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(AccentMint)
-                            .shadow(4.dp, CircleShape, ambientColor = AccentMint, spotColor = AccentMint)
-                    )
-                    Text(
-                        text = "Thiết bị đã được xác thực",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFFEEF2FF)
-                    )
-                }
-            }
-        }
-
-        // Section: Sự kiện mở bán Header + Bộ lọc danh mục
-        var selectedCategory by remember { mutableStateOf("Tất cả") }
-        val filteredEvents = remember(events, selectedCategory) {
-            if (selectedCategory == "Tất cả") events
-            else events.filter { ev ->
-                val desc = (ev.description ?: "") + " " + ev.title
-                when (selectedCategory) {
-                    "Âm nhạc" -> desc.contains("ÂM NHẠC", true) || desc.contains("LIVE SHOW", true) || desc.contains("LỄ HỘI", true) || desc.contains("Concert", true)
-                    "An toàn TT" -> desc.contains("AN TOÀN", true) || desc.contains("Security", true) || desc.contains("KMA", true)
-                    "Esports & Tech" -> desc.contains("ESPORTS", true) || desc.contains("CÔNG NGHỆ", true) || desc.contains("Google", true)
-                    else -> true
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Sự kiện đang mở bán (${events.size})",
-                fontSize = 17.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = TextDark
-            )
-            Text(
-                text = if (showAllEvents) "Thu gọn" else "Xem tất cả",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = PrimaryBlue,
-                modifier = Modifier
-                    .clickable { onToggleShowAll() }
-                    .padding(vertical = 4.dp, horizontal = 6.dp)
-            )
-        }
-
-        // Category Filter Chips
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf("Tất cả", "Âm nhạc", "An toàn TT", "Esports & Tech").forEach { cat ->
-                val isSelected = selectedCategory == cat
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isSelected) PrimaryBlue else Color.White.copy(alpha = 0.85f),
-                    modifier = Modifier.clickable { selectedCategory = cat }
-                ) {
-                    Text(
-                        text = cat,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = if (isSelected) Color.White else TextMuted,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        }
-
-        // Featured First Event Card (Dynamic from Backend)
-        val featuredEv = filteredEvents.firstOrNull()
-        if (featuredEv != null) {
-            val featTag = Regex("^\\[([^\\]]+)]").find(featuredEv.description ?: "")?.groupValues?.get(1) ?: "NỔI BẬT"
-            GlassCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onBuyEvent(featuredEv.id) },
-                shape = RoundedCornerShape(22.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(13.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(width = 92.dp, height = 108.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xFF0C1938)),
-                        contentAlignment = Alignment.Center
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(if (isStaffOrOrganizer) PrimaryBlue else AccentMint))
+                            Text(
+                                text = if (isStaffOrOrganizer) "Cổng soát vé nhân viên · RBAC: $userRole" else "Ví vé bảo mật TEE",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isStaffOrOrganizer) PrimaryBlue else AccentTeal
+                            )
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = if (isStaffOrOrganizer) "Sẵn sàng soát vé khách" else "$ticketCount vé đang sở hữu",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = TextDark,
+                            letterSpacing = (-0.4).sp
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isStaffOrOrganizer) Color(0xFFDCFCE7) else Color(0xFFEFF6FF)
+                    ) {
+                        Text(
+                            text = if (isStaffOrOrganizer) userRole else "ECDSA P-256",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isStaffOrOrganizer) Color(0xFF15803D) else PrimaryBlue,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+
+                if (isStaffOrOrganizer) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(80.dp)
-                                .offset(x = 22.dp, y = (-22).dp)
-                                .clip(CircleShape)
-                                .background(PurpleAccent)
-                        )
+                                .weight(1.4f)
+                                .height(44.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(PrimaryBlue)
+                                .clickable { onOpenScanner() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.QrCodeScanner, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                Text("Quét mã QR / NFC khách", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            }
+                        }
+
                         Box(
                             modifier = Modifier
-                                .size(68.dp)
-                                .offset(x = (-22).dp, y = 22.dp)
-                                .clip(CircleShape)
-                                .background(AccentTeal)
-                        )
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)) {
-                            Text(
-                                text = "HOT",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color(0xFFFCD34D),
-                                letterSpacing = 1.5.sp
-                            )
-                            Text(
-                                text = "${String.format("%,.0f", featuredEv.ticketPrice)} ₫",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "TEST 2K",
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFB9C7EA),
-                                letterSpacing = 1.sp
-                            )
+                                .weight(1f)
+                                .height(44.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(Color(0xFFF1F5F9))
+                                .clickable { onOpenCryptoLab() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Icon(Icons.Default.Security, null, tint = TextDark, modifier = Modifier.size(16.dp))
+                                Text("Crypto Lab", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextDark)
+                            }
                         }
                     }
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(PrimaryBlue)
+                                .clickable { onOpenTickets() },
+                            contentAlignment = Alignment.Center
                         ) {
-                            Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFEAF0FF)) {
-                                Text(
-                                    text = featTag,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFF244AB7),
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.ConfirmationNumber, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Text("Mở ví vé", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                             }
-                            Text(
-                                text = "Còn ${featuredEv.availableTickets} vé",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF16836F)
-                            )
                         }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = featuredEv.title,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = TextDark,
-                            lineHeight = 18.sp,
-                            maxLines = 2
-                        )
-                        Spacer(modifier = Modifier.height(5.dp))
-                        Text(
-                            text = formatEventTime(featuredEv.startTime) ?: featuredEv.startTime,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = PrimaryBlue
-                        )
-                        Text(
-                            text = featuredEv.location,
-                            fontSize = 10.sp,
-                            color = TextMuted,
-                            maxLines = 1
-                        )
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(Color(0xFFF1F5F9))
+                                .clickable { onOpenCryptoLab() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.Security, null, tint = TextDark, modifier = Modifier.size(16.dp))
+                                Text("Crypto Lab", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextDark)
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Expandable events list (All remaining real events from Backend)
-        AnimatedVisibility(
-            visible = showAllEvents,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut()
+        // 3. Horizontal Spotlight Carousel — Real Event Cover Photography (Ticketbox / Eventbrite Style)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Sự kiện nổi bật",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = TextDark,
+                    letterSpacing = (-0.3).sp
+                )
+                Text(
+                    text = "Đồng giá 2.000 ₫",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PrimaryBlue
+                )
+            }
+
+            if (isLoading && events.isEmpty()) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val brush = rememberShimmerBrush()
+                    repeat(2) {
+                        Column(
+                            modifier = Modifier
+                                .width(248.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color.White)
+                                .border(1.dp, BorderLight, RoundedCornerShape(16.dp))
+                        ) {
+                            Box(modifier = Modifier.fillMaxWidth().height(126.dp).background(brush))
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Box(modifier = Modifier.fillMaxWidth(0.85f).height(14.dp).clip(RoundedCornerShape(4.dp)).background(brush))
+                                Box(modifier = Modifier.fillMaxWidth(0.55f).height(10.dp).clip(RoundedCornerShape(4.dp)).background(brush))
+                            }
+                        }
+                    }
+                }
+            } else {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(events.take(5)) { ev ->
+                        val style = remember(ev.title) { posterStyleForEvent(ev.title, ev.description) }
+                        GlassCard(
+                            modifier = Modifier
+                                .width(252.dp)
+                                .clickable { onBuyEvent(ev.id) },
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            // Top Real Concert/Event Photo
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(128.dp)
+                            ) {
+                                EventCoverImage(
+                                    url = style.imageUrl,
+                                    fallbackColor = Color(0xFFE2E8F0),
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                // Solid Category Pill (Top-Left)
+                                Surface(
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(10.dp),
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = style.accent
+                                ) {
+                                    Text(
+                                        text = style.tag,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color.White,
+                                        letterSpacing = 0.6.sp,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    )
+                                }
+                                // Solid White Price Pill (Bottom-Right)
+                                Surface(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(10.dp),
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color.White,
+                                    shadowElevation = 2.dp
+                                ) {
+                                    Text(
+                                        text = "${String.format("%,.0f", ev.ticketPrice)} ₫",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = PrimaryBlue,
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            // Solid White Card Body
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = ev.title,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextDark,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    lineHeight = 18.sp
+                                )
+                                Text(
+                                    text = formatEventTime(ev.startTime) ?: "",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = PrimaryBlue,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = ev.location,
+                                    fontSize = 11.sp,
+                                    color = TextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Category Filter Strip + Full Event Feed
+        Column(
+            modifier = Modifier.padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                filteredEvents.drop(1).forEachIndexed { idx, event ->
-                    val tag = Regex("^\\[([^\\]]+)]").find(event.description ?: "")?.groupValues?.get(1) ?: "SỰ KIỆN"
-                    val badgeColors = listOf(
-                        Color(0xFFEAF0FF) to Color(0xFF244AB7),
-                        Color(0xFFE9F7F3) to Color(0xFF126C5F),
-                        Color(0xFFF1ECFF) to Color(0xFF6743B6),
-                        Color(0xFFFFF3E0) to Color(0xFFB45309)
-                    )
-                    val (bgCol, fgCol) = badgeColors[idx % badgeColors.size]
+            Text(
+                text = "Tất cả sự kiện (${filteredEvents.size})",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = TextDark,
+                letterSpacing = (-0.3).sp
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf("Tất cả", "Âm nhạc", "An toàn TT", "Esports & Tech").forEach { cat ->
+                    val isSelected = selectedCategory == cat
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isSelected) PrimaryBlue else Color.White)
+                            .border(1.dp, if (isSelected) PrimaryBlue else BorderLight, RoundedCornerShape(10.dp))
+                            .clickable { selectedCategory = cat }
+                            .padding(horizontal = 11.dp, vertical = 7.dp)
+                    ) {
+                        Text(
+                            text = cat,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) Color.White else TextMuted
+                        )
+                    }
+                }
+            }
+
+            if (isLoading && events.isEmpty()) {
+                repeat(4) {
+                    EventCardSkeleton()
+                }
+            } else {
+                filteredEvents.forEach { event ->
+                    val style = remember(event.title) { posterStyleForEvent(event.title, event.description) }
                     GlassCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onBuyEvent(event.id) },
+                        shape = RoundedCornerShape(16.dp)
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(13.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Surface(shape = RoundedCornerShape(6.dp), color = bgCol) {
-                                        Text(
-                                            text = tag,
-                                            fontSize = 8.sp,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            color = fgCol,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                    Text(
-                                        text = formatEventTime(event.startTime) ?: "",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TextMuted
-                                    )
-                                }
+                            EventCoverImage(
+                                url = style.imageUrl,
+                                fallbackColor = Color(0xFFE2E8F0),
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                            )
+
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text(
+                                    text = formatEventTime(event.startTime) ?: style.tag,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PrimaryBlue
+                                )
                                 Text(
                                     text = event.title,
                                     fontSize = 13.sp,
-                                    fontWeight = FontWeight.ExtraBold,
+                                    fontWeight = FontWeight.Bold,
                                     color = TextDark,
                                     maxLines = 2,
-                                    modifier = Modifier.padding(top = 4.dp)
+                                    overflow = TextOverflow.Ellipsis,
+                                    lineHeight = 17.sp
                                 )
                                 Text(
                                     text = "${event.location} · Còn ${event.availableTickets} vé",
                                     fontSize = 10.sp,
                                     color = TextMuted,
                                     maxLines = 1,
-                                    modifier = Modifier.padding(top = 2.dp)
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Button(
-                                onClick = { onBuyEvent(event.id) },
-                                shape = RoundedCornerShape(11.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 7.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue)
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(PrimaryBlue)
+                                    .clickable { onBuyEvent(event.id) }
+                                    .padding(horizontal = 11.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "${String.format("%,.0f", event.ticketPrice)} ₫",
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.ExtraBold
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White
                                 )
                             }
                         }
                     }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Quick Actions Grid (Vé của tôi & Quét vé)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(11.dp)
-        ) {
-            // "Vé của tôi" shortcut
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(69.dp)
-                    .clip(RoundedCornerShape(19.dp))
-                    .background(MintBg)
-                    .clickable { onOpenTickets() }
-                    .padding(13.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(11.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(Color.White),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ConfirmationNumber,
-                            contentDescription = null,
-                            tint = MintText,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Text(
-                        text = "Vé của tôi",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MintText
-                    )
-                }
-            }
-
-            // "Quét vé" shortcut
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(69.dp)
-                    .clip(RoundedCornerShape(19.dp))
-                    .background(PurpleBg)
-                    .clickable { onOpenScanner() }
-                    .padding(13.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(11.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(13.dp))
-                            .background(Color.White),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.QrCodeScanner,
-                            contentDescription = null,
-                            tint = PurpleText,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Text(
-                        text = "Quét vé",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = PurpleText
-                    )
                 }
             }
         }
@@ -966,11 +909,13 @@ private fun HomeMainView(
 }
 
 /**
- * TAB 2: Vé của tôi (Tickets.dc.html)
+ * TAB 2: Ví vé — Boarding-pass ticket stubs với Shimmer Loading Skeleton
  */
 @Composable
 private fun TicketsWalletView(
     tickets: List<Ticket>,
+    isLoading: Boolean,
+    onRefresh: () -> Unit,
     onSelectTicket: (Ticket) -> Unit
 ) {
     var selectedSegment by remember { mutableStateOf("upcoming") }
@@ -997,11 +942,9 @@ private fun TicketsWalletView(
             .fillMaxSize()
             .padding(horizontal = 20.dp, vertical = 14.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Header: Title + Search button
+        // Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1009,48 +952,63 @@ private fun TicketsWalletView(
         ) {
             Column {
                 Text(
-                    text = "Ví cá nhân",
-                    fontSize = 12.sp,
+                    text = "Kho vé mã hóa AES-256-GCM",
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = TextMuted
                 )
                 Text(
                     text = "Vé của tôi",
-                    fontSize = 25.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black,
                     letterSpacing = (-0.6).sp,
                     color = TextDark
                 )
             }
 
-            Box(
-                modifier = Modifier
-                    .size(45.dp)
-                    .clip(RoundedCornerShape(15.dp))
-                    .background(Color.White.copy(alpha = 0.88f))
-                    .border(1.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(15.dp))
-                    .shadow(elevation = 6.dp, shape = RoundedCornerShape(15.dp))
-                    .clickable { isSearchActive = !isSearchActive },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "Tìm kiếm vé",
-                    tint = PrimaryBlue,
-                    modifier = Modifier.size(22.dp)
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.White)
+                        .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
+                        .clickable { onRefresh() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = PrimaryNavy)
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = "Làm mới", tint = TextDark, modifier = Modifier.size(19.dp))
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isSearchActive) PrimaryNavy else Color.White)
+                        .border(1.dp, if (isSearchActive) PrimaryNavy else BorderLight, RoundedCornerShape(12.dp))
+                        .clickable { isSearchActive = !isSearchActive },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Tìm kiếm vé",
+                        tint = if (isSearchActive) Color.White else TextDark,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
             }
         }
 
-        // Search Input if active
         AnimatedVisibility(visible = isSearchActive) {
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("Tìm theo tên sự kiện hoặc mã vé...", fontSize = 12.sp) },
+                placeholder = { Text("Tìm tên sự kiện hoặc mã vé...", fontSize = 12.sp) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = Color.White,
                     unfocusedContainerColor = Color.White
@@ -1058,417 +1016,123 @@ private fun TicketsWalletView(
             )
         }
 
-        // Segmented Control Tabs (Sắp tới vs Lịch sử)
+        // Segmented Control
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(15.dp))
-                .background(Color(0xFFE9ECF3))
-                .padding(4.dp),
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xFFE9ECF2))
+                .padding(3.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             val isUpcoming = selectedSegment == "upcoming"
-            val upcomingCount = if (activeTickets.isNotEmpty()) activeTickets.size else 2
-            val pastCount = if (pastTickets.isNotEmpty()) pastTickets.size else 3
-
-            // Upcoming tab
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(if (isUpcoming) Color.White else Color.Transparent)
                     .clickable { selectedSegment = "upcoming" },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "Sắp tới · $upcomingCount",
-                    fontSize = 11.sp,
+                    text = "Sắp tới (${activeTickets.size})",
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    color = if (isUpcoming) Color(0xFF244AB7) else Color(0xFF777F8F)
+                    color = if (isUpcoming) TextDark else TextMuted
                 )
             }
-
-            // History tab
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(if (!isUpcoming) Color.White else Color.Transparent)
                     .clickable { selectedSegment = "history" },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "Lịch sử · $pastCount",
-                    fontSize = 11.sp,
+                    text = "Lịch sử (${pastTickets.size})",
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    color = if (!isUpcoming) Color(0xFF244AB7) else Color(0xFF777F8F)
+                    color = if (!isUpcoming) TextDark else TextMuted
                 )
             }
         }
 
-        // Segment Content
-        if (selectedSegment == "upcoming") {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                // Featured Ticket Card (Matches preview's SecureFest Premium Access card)
-                val firstTicket = activeTickets.firstOrNull()
-                val featuredTicket = firstTicket ?: Ticket(
-                    id = "TKT-PREMIUM-001",
-                    ticketCode = "SEC-P12-2026",
-                    eventTitle = "SecureFest Vietnam 2026",
-                    eventLocation = "SECC · Hall A",
-                    eventStartTime = "14.11 · 18:30",
-                    status = "ACTIVE"
-                )
-
-                GlassCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onSelectTicket(featuredTicket) },
-                    shape = RoundedCornerShape(23.dp)
-                ) {
-                    Column {
-                        // Top navy header with decorative shape
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(94.dp)
-                                .clip(RoundedCornerShape(topStart = 23.dp, topEnd = 23.dp))
-                                .background(PrimaryNavyDark)
-                                .padding(17.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(130.dp)
-                                    .offset(x = 160.dp, y = (-57).dp)
-                                    .clip(CircleShape)
-                                    .background(PurpleDark)
-                            )
-
-                            Column(modifier = Modifier.padding(end = 66.dp)) {
-                                Text(
-                                    text = (featuredTicket.eventTitle ?: "SECUREFEST 2026").uppercase(),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFCBD6FF),
-                                    letterSpacing = 0.8.sp,
-                                    maxLines = 1
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = featuredTicket.ticketCode.ifBlank { "Vé Premium Access" },
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color.White
-                                )
-                            }
-
-                            // HỢP LỆ badge
-                            Surface(
-                                modifier = Modifier.align(Alignment.BottomEnd),
-                                shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFF62D8BA)
-                            ) {
-                                Text(
-                                    text = "HỢP LỆ",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFF0D4D41),
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
-                                )
-                            }
-                        }
-
-                        // Bottom info columns
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(15.dp, 17.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "THỜI GIAN",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF858D9D)
-                                )
-                                Text(
-                                    text = formatEventTime(featuredTicket.eventStartTime) ?: "14.11 · 18:30",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = TextDark,
-                                    modifier = Modifier.padding(top = 3.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "ĐỊA ĐIỂM",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF858D9D)
-                                )
-                                Text(
-                                    text = featuredTicket.eventLocation ?: "Premium · P12",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = TextDark,
-                                    maxLines = 1,
-                                    modifier = Modifier.padding(top = 3.dp)
-                                )
-                            }
-                        }
+        // Shimmer Loading Skeletons while fetching tickets
+        if (isLoading && tickets.isEmpty()) {
+            repeat(3) {
+                TicketCardSkeleton()
+            }
+        } else if (selectedSegment == "upcoming") {
+            if (activeTickets.isEmpty()) {
+                GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.ConfirmationNumber, null, tint = TextSubtle, modifier = Modifier.size(36.dp))
+                        Text("Chưa có vé sắp tới", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
+                        Text(
+                            "Mua vé từ mục Khám phá hoặc chờ bạn bè chuyển nhượng vé (ví tự động cập nhật mỗi 5 giây).",
+                            fontSize = 11.sp, color = TextMuted,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
                     }
                 }
-
-                // Subsequent active tickets or secondary mock card
-                if (activeTickets.size > 1) {
-                    val cardPalettes = listOf(
-                        Color(0xFFEAF0FF) to PrimaryBlue,
-                        Color(0xFFE9F7F3) to Color(0xFF126C5F),
-                        Color(0xFFF1ECFF) to Color(0xFF6743B6),
-                        Color(0xFFFFF3E0) to Color(0xFFB45309),
-                        Color(0xFFFCE7F3) to Color(0xFFBE185D)
+            } else {
+                activeTickets.forEach { ticket ->
+                    TicketStubCard(
+                        ticket = ticket,
+                        isPast = false,
+                        onClick = { onSelectTicket(ticket) }
                     )
-                    activeTickets.drop(1).forEachIndexed { idx, ticket ->
-                        val (bgTint, fgTint) = cardPalettes[idx % cardPalettes.size]
-                        GlassCard(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onSelectTicket(ticket) },
-                            shape = RoundedCornerShape(21.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(15.dp),
-                                horizontalArrangement = Arrangement.spacedBy(13.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(58.dp, 65.dp)
-                                        .clip(RoundedCornerShape(15.dp))
-                                        .background(bgTint),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ConfirmationNumber,
-                                        contentDescription = null,
-                                        tint = fgTint,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = ticket.eventTitle ?: "Vé sự kiện SecureTicket",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = TextDark,
-                                        maxLines = 2
-                                    )
-                                    Text(
-                                        text = formatEventTime(ticket.eventStartTime) ?: "Thời gian thông báo sau",
-                                        fontSize = 10.sp,
-                                        color = TextMuted,
-                                        modifier = Modifier.padding(top = 4.dp)
-                                    )
-                                    Row(
-                                        modifier = Modifier.padding(top = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            text = ticket.ticketCode.ifBlank { "General Admission" },
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = fgTint
-                                        )
-                                        Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFF1F5F9)) {
-                                            Text(
-                                                text = "Chuyển ${ticket.transferCount ?: 0}/2",
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color(0xFF475569),
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                    contentDescription = null,
-                                    tint = Color(0xFF9299A8),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    // Secondary mockup matching preview
-                    val secondTicketMock = Ticket(
-                        id = "TKT-PREVIEW-002",
-                        ticketCode = "GA-ADM-092",
-                        eventTitle = "Android Makers Night",
-                        eventLocation = "The Sentry",
-                        eventStartTime = "22 thg 11 · 19:00",
-                        status = "ACTIVE"
-                    )
-                    GlassCard(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelectTicket(secondTicketMock) },
-                        shape = RoundedCornerShape(21.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(15.dp),
-                            horizontalArrangement = Arrangement.spacedBy(13.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(58.dp, 65.dp)
-                                    .clip(RoundedCornerShape(15.dp))
-                                    .background(Color(0xFFEAF0FF)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ConfirmationNumber,
-                                    contentDescription = null,
-                                    tint = PrimaryBlue,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Android Makers Night",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = TextDark
-                                )
-                                Text(
-                                    text = "22 thg 11 · 19:00",
-                                    fontSize = 10.sp,
-                                    color = TextMuted,
-                                    modifier = Modifier.padding(top = 4.dp)
-                                )
-                                Text(
-                                    text = "General Admission",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = PrimaryBlue,
-                                    modifier = Modifier.padding(top = 6.dp)
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = null,
-                                tint = Color(0xFF9299A8),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
                 }
             }
         } else {
-            // History segment
-            Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
-                val historyList: List<Pair<String, String>> = if (pastTickets.isNotEmpty()) {
-                    pastTickets.map { (it.eventTitle ?: "Sự kiện đã tham dự") to (it.eventStartTime ?: "Trước đây") }
-                } else {
-                    listOf(
-                        "Cloud Native Day" to "12 tháng 8, 2026",
-                        "DevSecOps Summit" to "03 tháng 6, 2026",
-                        "Kotlin Saigon Meetup" to "18 tháng 4, 2026"
-                    )
-                }
-
-                historyList.forEach { (title, date) ->
-                    GlassCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp)
+            if (pastTickets.isEmpty()) {
+                GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Row(
-                            modifier = Modifier.padding(15.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(Color(0xFFF0F2F6)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ConfirmationNumber,
-                                    contentDescription = null,
-                                    tint = Color(0xFF697184),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = title,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = TextDark
-                                )
-                                Text(
-                                    text = date,
-                                    fontSize = 10.sp,
-                                    color = Color(0xFF7A8292),
-                                    modifier = Modifier.padding(top = 3.dp)
-                                )
-                            }
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = Color(0xFFF1F5F9)
-                            ) {
-                                Text(
-                                    text = "ĐÃ DÙNG",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color(0xFF6E7687),
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                )
-                            }
-                        }
+                        Text("Chưa có vé đã sử dụng", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextMuted)
                     }
                 }
+            } else {
+                pastTickets.forEach { ticket ->
+                    TicketStubCard(
+                        ticket = ticket,
+                        isPast = true,
+                        onClick = { onSelectTicket(ticket) }
+                    )
+                }
             }
+        }
+
+        // Subtle Hardware Binding Footer
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White)
+                .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(Icons.Default.Shield, null, tint = AccentTeal, modifier = Modifier.size(16.dp))
+            Text(
+                text = "Tất cả vé được ký số ECDSA P-256 & lưu mã hóa trong AndroidKeyStore TEE.",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                color = TextMuted
+            )
         }
 
         Spacer(modifier = Modifier.height(10.dp))
-
-        // Security Notice Banner at bottom
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(17.dp))
-                .background(Color(0xFFEEF6FF))
-                .padding(horizontal = 14.dp, vertical = 12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Shield,
-                    contentDescription = null,
-                    tint = PrimaryBlue,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text(
-                    text = "Mọi vé đều được ký số và ràng buộc với thiết bị này.",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF31547F),
-                    lineHeight = 15.sp
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
     }
 }
 

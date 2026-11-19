@@ -380,4 +380,51 @@ router.post('/validate-nfc', authenticateToken, authorizeRoles('STAFF', 'ADMIN')
   }
 });
 
+/**
+ * Lấy lịch sử soát vé & thống kê ca trực cho Nhân viên / Ban tổ chức (RBAC: STAFF, ORGANIZER, ADMIN)
+ * GET /api/validate/logs
+ */
+router.get('/logs', authenticateToken, authorizeRoles('STAFF', 'ADMIN', 'ORGANIZER'), async (req, res) => {
+  try {
+    const [logs] = await pool.execute(
+      `SELECT vl.id, vl.ticket_id, vl.method, vl.result, vl.notes, vl.scanned_at,
+              t.ticket_code, e.title as event_title, u.full_name as owner_name,
+              s.full_name as staff_name
+       FROM validation_logs vl
+       LEFT JOIN tickets t ON vl.ticket_id = t.id
+       LEFT JOIN events e ON t.event_id = e.id
+       LEFT JOIN users u ON t.current_owner_id = u.id
+       LEFT JOIN users s ON vl.staff_id = s.id
+       ORDER BY vl.scanned_at DESC
+       LIMIT 30`
+    );
+
+    const [statsRows] = await pool.execute(
+      `SELECT
+         COUNT(*) as totalScans,
+         SUM(CASE WHEN result = 'SUCCESS' THEN 1 ELSE 0 END) as successCount,
+         SUM(CASE WHEN result = 'FAILED_ALREADY_USED' THEN 1 ELSE 0 END) as replayBlockedCount,
+         SUM(CASE WHEN result != 'SUCCESS' THEN 1 ELSE 0 END) as rejectedCount
+       FROM validation_logs`
+    );
+
+    const stats = statsRows[0] || {};
+    res.json({
+      success: true,
+      data: {
+        stats: {
+          totalScans: Number(stats.totalScans || 0),
+          successCount: Number(stats.successCount || 0),
+          replayBlockedCount: Number(stats.replayBlockedCount || 0),
+          rejectedCount: Number(stats.rejectedCount || 0)
+        },
+        logs
+      }
+    });
+  } catch (error) {
+    console.error('[Validation] Fetch logs error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
 export default router;

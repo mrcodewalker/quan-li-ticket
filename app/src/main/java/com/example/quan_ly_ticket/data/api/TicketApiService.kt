@@ -82,6 +82,31 @@ interface TicketApiService {
     @POST("api/validate/validate-nfc")
     suspend fun validateNfc(@Body request: ValidateNfcRequest): Response<ApiResponse<ValidationResultData>>
 
+    @GET("api/validate/logs")
+    suspend fun getValidationLogs(): Response<ApiResponse<ValidationLogsResponse>>
+
+    // --- Organizer Management & SIEM ---
+    @GET("api/events/organizer/dashboard")
+    suspend fun getOrganizerDashboard(): Response<ApiResponse<OrganizerDashboardData>>
+
+    @GET("api/events/organizer/audit-logs")
+    suspend fun getSecurityAuditLogs(): Response<ApiResponse<List<SecurityAuditLogItem>>>
+
+    @POST("api/events")
+    suspend fun createEvent(@Body request: CreateEventRequest): Response<ApiResponse<Any>>
+
+    @PUT("api/events/{id}/status")
+    suspend fun updateEventStatus(
+        @Path("id") eventId: String,
+        @Body request: UpdateEventStatusRequest
+    ): Response<ApiResponse<Any>>
+
+    @POST("api/tickets/{id}/revoke")
+    suspend fun revokeTicket(
+        @Path("id") ticketId: String,
+        @Body request: RevokeTicketRequest
+    ): Response<ApiResponse<Any>>
+
     // --- Cryptography Keys ---
     @GET("api/crypto/server-public-key")
     suspend fun getServerPublicKey(): Response<ApiResponse<ServerCryptoData>>

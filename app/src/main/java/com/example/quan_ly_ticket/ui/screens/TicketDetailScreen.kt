@@ -44,6 +44,7 @@ import com.example.quan_ly_ticket.data.model.VerifyRecipientRequest
 import com.example.quan_ly_ticket.security.CryptoHelper
 import com.example.quan_ly_ticket.security.KeystoreManager
 import com.example.quan_ly_ticket.service.SecureTicketHceService
+import com.example.quan_ly_ticket.ui.components.EventCoverImage
 import com.example.quan_ly_ticket.ui.components.GlassCard
 import com.example.quan_ly_ticket.ui.theme.*
 import kotlinx.coroutines.Dispatchers
@@ -235,23 +236,28 @@ fun TicketDetailScreen(
                             spotColor = Color(0x24243154)
                         )
                 ) {
-                    // Top Card Section (Navy with Purple Accent)
+                    // Top Card Section (Real event cover photo + subtle readability scrim)
+                    val ticketStyle = remember(ticket.eventTitle) { posterStyleForEvent(ticket.eventTitle) }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(topStart = 23.dp, topEnd = 23.dp, bottomStart = 10.dp, bottomEnd = 10.dp))
-                            .background(PrimaryNavy)
-                            .padding(18.dp)
+                            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 8.dp, bottomEnd = 8.dp))
                     ) {
+                        EventCoverImage(
+                            url = ticketStyle.imageUrl,
+                            fallbackColor = PrimaryNavy,
+                            modifier = Modifier.matchParentSize()
+                        )
                         Box(
                             modifier = Modifier
-                                .size(110.dp)
-                                .offset(x = 180.dp, y = (-49).dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF7B4FD6))
+                                .matchParentSize()
+                                .background(
+                                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        listOf(Color(0x660F172A), Color(0xCC0F172A))
+                                    )
+                                )
                         )
-
-                        Column(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
