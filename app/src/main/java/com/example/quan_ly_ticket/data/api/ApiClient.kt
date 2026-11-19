@@ -1,6 +1,7 @@
 package com.example.quan_ly_ticket.data.api
 
 import android.content.Context
+import com.example.quan_ly_ticket.BuildConfig
 import com.example.quan_ly_ticket.data.local.SecurePreferences
 import okhttp3.CertificatePinner
 import okhttp3.OkHttpClient
@@ -10,14 +11,15 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object ApiClient {
-    // URL Backend chính thức chạy 24/7 trên VPS Ubuntu (chạy được trên cả máy thật 4G/Wifi lẫn giả lập Emulator)
+    // URL Backend chạy 24/7 trên VPS Ubuntu (chạy được trên cả máy thật 4G/Wifi lẫn giả lập Emulator)
     var baseUrl: String = "http://42.96.5.186:5000/"
 
-    // Certificate Pinning chống nghe lén và giải mã SSL bởi Burp Suite / Mitmproxy
-    var enableCertificatePinning: Boolean = false
+    // Phase 3 (FR-18): Certificate Pinning chống nghe lén SSL MITM (Burp Suite / Mitmproxy)
+    // Ghim 2 mã băm SPKI SHA-256 (Primary Server Cert + Backup Let's Encrypt ISRG Root X1)
+    var enableCertificatePinning: Boolean = !BuildConfig.DEBUG
     private val certificatePinner = CertificatePinner.Builder()
-        // Ghim mã băm SHA-256 Public Key của chứng chỉ Server HTTPS
-        .add("42.96.5.186", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        .add("api.secureticket.vn", "sha256/47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")
+        .add("api.secureticket.vn", "sha256/C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=")
         .build()
 
     private var retrofit: Retrofit? = null
@@ -26,10 +28,18 @@ object ApiClient {
     fun getService(context: Context): TicketApiService {
         if (apiService != null) return apiService!!
 
-        val securePrefs = SecurePreferences(context)
+        val appContext = context.applicationContext
+        val securePrefs = SecurePreferences(appContext)
 
+        // Phase 1 (FR-07): Bảo vệ Logcat - Không in Body chứa mật khẩu, JWT hay qr_secret_seed ra Logcat
         val loggingInterceptor = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.HEADERS
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
+            redactHeader("Authorization")
+            redactHeader("X-Device-Signature")
         }
 
         val clientBuilder = OkHttpClient.Builder()
@@ -39,13 +49,14 @@ object ApiClient {
                 val requestBuilder = chain.request().newBuilder()
                 val token = securePrefs.getAccessToken()
                 if (!token.isNullOrEmpty()) {
-                    requestBuilder.addHeader("Authorization", "Bearer $token")
+                    requestBuilder.header("Authorization", "Bearer $token")
                 }
                 chain.proceed(requestBuilder.build())
             }
+            .authenticator(TokenAuthenticator(appContext) { baseUrl })
             .addInterceptor(loggingInterceptor)
 
-        if (enableCertificatePinning) {
+        if (enableCertificatePinning && baseUrl.startsWith("https://")) {
             clientBuilder.certificatePinner(certificatePinner)
         }
 
@@ -69,4 +80,3 @@ object ApiClient {
         getService(context)
     }
 }
-

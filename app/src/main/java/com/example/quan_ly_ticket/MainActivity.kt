@@ -3,20 +3,26 @@ package com.example.quan_ly_ticket
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.CreateOrderData
 import com.example.quan_ly_ticket.data.model.Ticket
+import com.example.quan_ly_ticket.security.SecurityCheck
 import com.example.quan_ly_ticket.ui.screens.*
 import com.example.quan_ly_ticket.ui.theme.SecureTicketTheme
 
@@ -36,13 +42,18 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Tính năng bảo mật 4B: Bật FLAG_SECURE để ngăn chặn chụp màn hình và quay video màn hình chứa mã vé
+        // Tính năng bảo mật 4B: Bật FLAG_SECURE ở tầng WindowManager/SurfaceFlinger
+        // để ngăn chặn chụp màn hình, quay video màn hình (MediaProjection) và trình chiếu không chuẩn HDCP
         window.setFlags(
             WindowManager.LayoutParams.FLAG_SECURE,
             WindowManager.LayoutParams.FLAG_SECURE
         )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            setRecentsScreenshotEnabled(false) // Chặn lưu ảnh thu nhỏ màn hình vé trong Recent Apps (Đa nhiệm)
+        }
 
         securePrefs = SecurePreferences(this)
+        val securityStatus = SecurityCheck.checkDeviceSecurity(this)
 
         setContent {
             SecureTicketTheme {
@@ -58,77 +69,122 @@ class MainActivity : FragmentActivity() {
                     var selectedTicket by remember { mutableStateOf<Ticket?>(null) }
                     var activeOrder by remember { mutableStateOf<CreateOrderData?>(null) }
 
-                    when (currentScreen) {
-                        Screen.LOGIN -> LoginScreen(
-                            onLoginSuccess = { _ ->
-                                currentScreen = Screen.HOME
-                            },
-                            onTriggerBiometric = {
-                                showBiometricPrompt {
-                                    if (!securePrefs.getAccessToken().isNullOrEmpty()) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Phase 3 (FR-19): Adaptive RASP Security Banner khi phát hiện môi trường rủi ro trên bản Release
+                        if (securityStatus.isRestrictedMode) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFFB91C1C))
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = "⚠️ RASP Cảnh báo: Thiết bị có dấu hiệu can thiệp hệ thống (Root/Frida). Các giao dịch nhạy cảm được giám sát.",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Box(modifier = Modifier.weight(1f)) {
+                            when (currentScreen) {
+                                Screen.LOGIN -> LoginScreen(
+                                    onLoginSuccess = { _ ->
                                         currentScreen = Screen.HOME
-                                    } else {
-                                        Toast.makeText(this, "Chưa lưu phiên đăng nhập. Vui lòng đăng nhập bằng mật khẩu trước.", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onTriggerBiometric = {
+                                        showBiometricPrompt(
+                                            title = "Xác thực mở Ví vé SecureTicket",
+                                            subtitle = "Sử dụng vân tay hoặc mã khóa màn hình để xác nhận danh tính",
+                                            allowEmulatorFallback = false
+                                        ) {
+                                            if (!securePrefs.getAccessToken().isNullOrEmpty()) {
+                                                currentScreen = Screen.HOME
+                                            } else {
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    "Chưa lưu phiên đăng nhập. Vui lòng đăng nhập bằng mật khẩu lần đầu.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
                                     }
-                                }
-                            }
-                        )
+                                )
 
-                        Screen.HOME -> HomeScreen(
-                            onSelectTicket = { ticket ->
-                                selectedTicket = ticket
-                                currentScreen = Screen.TICKET_DETAIL
-                            },
-                            onProceedToPayment = { order ->
-                                activeOrder = order
-                                currentScreen = Screen.PAYMENT
-                            },
-                            onOpenScanner = {
-                                currentScreen = Screen.SCANNER
-                            },
-                            onOpenCryptoLab = {
-                                currentScreen = Screen.CRYPTO_LAB
-                            },
-                            onLogout = {
-                                currentScreen = Screen.LOGIN
-                            }
-                        )
-
-                        Screen.PAYMENT -> {
-                            activeOrder?.let { order ->
-                                PaymentScreen(
-                                    order = order,
-                                    onPaymentSuccess = { ticket ->
+                                Screen.HOME -> HomeScreen(
+                                    onSelectTicket = { ticket ->
                                         selectedTicket = ticket
                                         currentScreen = Screen.TICKET_DETAIL
                                     },
-                                    onCancel = {
-                                        currentScreen = Screen.HOME
+                                    onProceedToPayment = { order ->
+                                        activeOrder = order
+                                        currentScreen = Screen.PAYMENT
+                                    },
+                                    onOpenScanner = {
+                                        currentScreen = Screen.SCANNER
+                                    },
+                                    onOpenCryptoLab = {
+                                        currentScreen = Screen.CRYPTO_LAB
+                                    },
+                                    onRequireBiometric = { title, subtitle, onVerified ->
+                                        showBiometricPrompt(
+                                            title = title,
+                                            subtitle = subtitle,
+                                            allowEmulatorFallback = true,
+                                            onSuccess = onVerified
+                                        )
+                                    },
+                                    onLogout = {
+                                        currentScreen = Screen.LOGIN
                                     }
                                 )
-                            } ?: run {
-                                currentScreen = Screen.HOME
-                            }
-                        }
 
-                        Screen.TICKET_DETAIL -> {
-                            selectedTicket?.let { ticket ->
-                                TicketDetailScreen(
-                                    ticket = ticket,
+                                Screen.PAYMENT -> {
+                                    activeOrder?.let { order ->
+                                        PaymentScreen(
+                                            order = order,
+                                            onPaymentSuccess = { ticket ->
+                                                selectedTicket = ticket
+                                                currentScreen = Screen.TICKET_DETAIL
+                                            },
+                                            onCancel = {
+                                                currentScreen = Screen.HOME
+                                            }
+                                        )
+                                    } ?: run {
+                                        currentScreen = Screen.HOME
+                                    }
+                                }
+
+                                Screen.TICKET_DETAIL -> {
+                                    selectedTicket?.let { ticket ->
+                                        TicketDetailScreen(
+                                            ticket = ticket,
+                                            onRequireBiometric = { title, subtitle, onVerified ->
+                                                showBiometricPrompt(
+                                                    title = title,
+                                                    subtitle = subtitle,
+                                                    allowEmulatorFallback = true,
+                                                    onSuccess = onVerified
+                                                )
+                                            },
+                                            onBack = { currentScreen = Screen.HOME }
+                                        )
+                                    } ?: run {
+                                        currentScreen = Screen.HOME
+                                    }
+                                }
+
+                                Screen.SCANNER -> ScannerScreen(
                                     onBack = { currentScreen = Screen.HOME }
                                 )
-                            } ?: run {
-                                currentScreen = Screen.HOME
+
+                                Screen.CRYPTO_LAB -> CryptoLabScreen(
+                                    onBack = { currentScreen = Screen.HOME }
+                                )
                             }
                         }
-
-                        Screen.SCANNER -> ScannerScreen(
-                            onBack = { currentScreen = Screen.HOME }
-                        )
-
-                        Screen.CRYPTO_LAB -> CryptoLabScreen(
-                            onBack = { currentScreen = Screen.HOME }
-                        )
                     }
                 }
             }
@@ -136,16 +192,34 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * Xác thực sinh trắc học vân tay / khuôn mặt (AndroidX BiometricPrompt)
+     * Xác thực sinh trắc học vân tay / khuôn mặt / PIN khóa máy (Phase 2 FR-11: BIOMETRIC_STRONG or DEVICE_CREDENTIAL)
      */
-    private fun showBiometricPrompt(onSuccess: () -> Unit) {
+    private fun showBiometricPrompt(
+        title: String,
+        subtitle: String,
+        allowEmulatorFallback: Boolean = true,
+        onSuccess: () -> Unit
+    ) {
         val biometricManager = BiometricManager.from(this)
         val canAuthenticate = biometricManager.canAuthenticate(
             BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
         )
 
         if (canAuthenticate != BiometricManager.BIOMETRIC_SUCCESS) {
-            Toast.makeText(this, "Thiết bị chưa cài đặt hoặc không hỗ trợ sinh trắc học.", Toast.LENGTH_SHORT).show()
+            if (allowEmulatorFallback) {
+                Toast.makeText(
+                    this,
+                    "Thiết bị chưa cài đặt Vân tay/PIN — Chuyển sang ký số trực tiếp bằng AndroidKeyStore TEE",
+                    Toast.LENGTH_SHORT
+                ).show()
+                onSuccess()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Thiết bị chưa cài đặt vân tay hoặc mã khóa màn hình.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
             return
         }
 
@@ -162,7 +236,7 @@ class MainActivity : FragmentActivity() {
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    Toast.makeText(this@MainActivity, "Lỗi sinh trắc học: $errString", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Hủy/Lỗi sinh trắc học: $errString", Toast.LENGTH_SHORT).show()
                 }
 
                 override fun onAuthenticationFailed() {
@@ -173,8 +247,8 @@ class MainActivity : FragmentActivity() {
         )
 
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Xác thực mở Ví vé SecureTicket")
-            .setSubtitle("Sử dụng vân tay hoặc mã khóa màn hình để xác nhận danh tính")
+            .setTitle(title)
+            .setSubtitle(subtitle)
             .setAllowedAuthenticators(
                 BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
             )
@@ -183,4 +257,3 @@ class MainActivity : FragmentActivity() {
         prompt.authenticate(promptInfo)
     }
 }
-

@@ -53,7 +53,6 @@ export async function initializeKeys() {
   ensureKeysLoaded();
   console.log('[Crypto] Server ECDSA P-256 keypair initialized.');
 
-  // Cập nhật hoặc lưu vào bảng crypto_keys trên MySQL
   try {
     const keyId = 'server-ecdsa-v1';
     await pool.execute(
@@ -121,7 +120,6 @@ export function generateDynamicQrPayload(ticketId, qrSecretSeed) {
     .digest('hex')
     .substring(0, 16);
 
-  // Trả về payload mã hóa dạng JSON hoặc chuỗi kết hợp
   return {
     ticketId,
     timeSlice,
@@ -136,7 +134,6 @@ export function generateDynamicQrPayload(ticketId, qrSecretSeed) {
 export function verifyDynamicQrPayload(ticketId, clientTimeSlice, clientToken, qrSecretSeed) {
   const currentTimeSlice = Math.floor(Date.now() / 30000);
 
-  // Kiểm tra thời gian trong khoảng [currentTimeSlice - 1, currentTimeSlice + 1]
   if (Math.abs(currentTimeSlice - clientTimeSlice) > 1) {
     return { valid: false, reason: 'QR Code expired or clock mismatch' };
   }
@@ -146,8 +143,8 @@ export function verifyDynamicQrPayload(ticketId, clientTimeSlice, clientToken, q
     .digest('hex')
     .substring(0, 16);
 
-  const bufClient = Buffer.from(clientToken, 'utf8');
-  const bufExpected = Buffer.from(expectedHmac, 'utf8');
+  const bufClient = Buffer.from(String(clientToken), 'utf8');
+  const bufExpected = Buffer.from(String(expectedHmac), 'utf8');
 
   if (bufClient.length !== bufExpected.length || !crypto.timingSafeEqual(bufClient, bufExpected)) {
     return { valid: false, reason: 'Invalid TOTP QR Token' };
@@ -157,18 +154,80 @@ export function verifyDynamicQrPayload(ticketId, clientTimeSlice, clientToken, q
 }
 
 /**
- * Xác minh chữ ký số thiết bị (Device Binding)
- * Kiểm tra xem thiết bị có đúng là thiết bị sở hữu giữ Private Key trong Keystore không.
+ * Chuẩn hóa khóa công khai từ Android Keystore (Base64 X.509 SPKI hoặc PEM) sang định dạng PEM chuẩn
  */
-export function verifyDeviceSignature(challenge, signatureBase64, devicePublicKeyPem) {
+export function normalizePublicKeyToPem(publicKeyInput) {
+  if (!publicKeyInput) return null;
+  const trimmed = publicKeyInput.trim();
+  if (trimmed.startsWith('-----BEGIN PUBLIC KEY-----')) {
+    return trimmed;
+  }
+  const cleanBase64 = trimmed.replace(/\s+/g, '');
+  const wrapped = cleanBase64.match(/.{1,64}/g)?.join('\n') || cleanBase64;
+  return `-----BEGIN PUBLIC KEY-----\n${wrapped}\n-----END PUBLIC KEY-----`;
+}
+
+/**
+ * Xác minh chữ ký số thiết bị (Device Binding - ECDSA P-256)
+ * Kiểm tra xem thiết bị có đúng là thiết bị sở hữu giữ Private Key trong AndroidKeyStore TEE không.
+ */
+export function verifyDeviceSignature(challenge, signatureBase64, devicePublicKeyInput) {
   try {
+    const pemKey = normalizePublicKeyToPem(devicePublicKeyInput);
+    if (!pemKey || !signatureBase64) return false;
     const verify = crypto.createVerify('SHA256');
     verify.update(challenge);
     verify.end();
-    return verify.verify(devicePublicKeyPem, signatureBase64, 'base64');
+    return verify.verify(pemKey, signatureBase64, 'base64');
   } catch (err) {
     console.error('[Crypto] Device signature verification error:', err.message);
     return false;
+  }
+}
+
+/**
+ * Mã hóa thông tin định danh khách hàng nhạy cảm (Customer PII: Số điện thoại, CCCD)
+ * bằng thuật toán AES-256-GCM (AEAD) trước khi lưu xuống Database
+ */
+function getPiiAesKeyBuffer() {
+  const rawHex = process.env.PII_ENCRYPTION_KEY;
+  if (rawHex && /^[0-9a-fA-F]{64}$/.test(rawHex)) {
+    return Buffer.from(rawHex, 'hex');
+  }
+  const secretSource = process.env.JWT_SECRET || 'SecureTicket_PII_MasterKey';
+  return crypto.createHash('sha256').update(secretSource).digest();
+}
+
+export function encryptCustomerPII(plaintext) {
+  if (!plaintext) return null;
+  const key = getPiiAesKeyBuffer();
+  const iv = crypto.randomBytes(12); // 96-bit IV chuẩn cho AES-GCM
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag(); // 128-bit GCM Integrity Tag
+  return `ENCv1:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+export function decryptCustomerPII(cipherString) {
+  if (!cipherString) return null;
+  if (!String(cipherString).startsWith('ENCv1:')) {
+    return cipherString; // Dữ liệu cũ chưa mã hóa
+  }
+  try {
+    const parts = String(cipherString).split(':');
+    if (parts.length !== 4) return null;
+    const iv = Buffer.from(parts[1], 'hex');
+    const authTag = Buffer.from(parts[2], 'hex');
+    const encrypted = Buffer.from(parts[3], 'hex');
+    const key = getPiiAesKeyBuffer();
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return decrypted.toString('utf8');
+  } catch (err) {
+    console.error('[Crypto] PII Decryption error (Tampered or invalid tag):', err.message);
+    return null;
   }
 }
 

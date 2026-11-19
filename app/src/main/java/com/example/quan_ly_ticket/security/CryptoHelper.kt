@@ -3,6 +3,7 @@ package com.example.quan_ly_ticket.security
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.util.Base64
+import com.example.quan_ly_ticket.data.model.Ticket
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import java.security.KeyFactory
@@ -14,15 +15,27 @@ import javax.crypto.spec.SecretKeySpec
 object CryptoHelper {
 
     /**
-     * Xác minh chữ ký số của Server trực tiếp trên Android Client bằng Server Public Key
+     * Khóa công khai ECDSA P-256 chuẩn của Server SecureTicket (SPKI Base64 từ backend/keys/server_public.pem)
+     */
+    const val DEFAULT_SERVER_PUBLIC_KEY_BASE64 =
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8cBc42TqLQC9ZMSfa+P4xyACUx425Dob+CzVdXuJ3/WjeYB17Dj7tb5a1Mwpw+E6xzEcYQsCNQZfDELMwaEvPw=="
+
+    /**
+     * Xác minh chữ ký số ECDSA P-256 của Server trực tiếp trên Android Client bằng Server Public Key.
+     * Cơ chế cốt lõi chống làm giả vé (Anti-Counterfeiting).
      */
     fun verifyServerSignature(
         canonicalString: String,
         signatureBase64: String,
-        serverPublicKeyBase64: String
+        serverPublicKeyBase64: String = DEFAULT_SERVER_PUBLIC_KEY_BASE64
     ): Boolean {
+        if (signatureBase64.isBlank()) return false
         return try {
-            val keyBytes = Base64.decode(serverPublicKeyBase64, Base64.DEFAULT)
+            val cleanPubKey = serverPublicKeyBase64
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replace("\\s".toRegex(), "")
+            val keyBytes = Base64.decode(cleanPubKey, Base64.DEFAULT)
             val spec = X509EncodedKeySpec(keyBytes)
             val kf = KeyFactory.getInstance("EC")
             val publicKey = kf.generatePublic(spec)
@@ -35,13 +48,22 @@ object CryptoHelper {
             val sigBytes = Base64.decode(signatureBase64, Base64.DEFAULT)
             signature.verify(sigBytes)
         } catch (e: Exception) {
-            e.printStackTrace()
             false
         }
     }
 
     /**
-     * Sinh mã TOTP động cục bộ dựa trên seed vé (HMAC-SHA256 xoay vòng mỗi 30s)
+     * Tạo chuỗi định danh vé chuẩn hóa (Canonical Ticket Payload) khớp với Backend:
+     * Định dạng: TICKET_ID|EVENT_ID|OWNER_ID|NONCE|TIMESTAMP_SECONDS
+     */
+    fun buildTicketCanonicalString(ticket: Ticket, fallbackOwnerId: String = ""): String {
+        val ownerId = ticket.currentOwnerId ?: fallbackOwnerId
+        val tsSeconds = ticket.issuedTimestamp ?: 1793346577L
+        return "${ticket.id}|${ticket.eventId ?: ""}|$ownerId|${ticket.nonce}|$tsSeconds"
+    }
+
+    /**
+     * Sinh mã TOTP động cục bộ dựa trên hạt giống bí mật qrSecretSeed của vé (HMAC-SHA256 xoay vòng mỗi 30s)
      */
     fun generateLocalRotatingCode(ticketId: String, qrSecretSeed: String): Pair<String, Int> {
         val now = System.currentTimeMillis()
@@ -74,4 +96,3 @@ object CryptoHelper {
         return bitmap
     }
 }
-

@@ -1,7 +1,7 @@
 ---
 title: "security-hardening"
 description: "Kế hoạch kiên cố hóa bảo mật toàn diện cho hệ thống SecureTicket (Backend Node.js & Android App) theo chuẩn OWASP ASVS v4.0 L2 và MASVS v2.0"
-status: pending
+status: completed
 priority: P1
 effort: "5-6d"
 tags: ["security", "owasp", "backend", "android", "ecdsa", "rasp"]
@@ -43,21 +43,21 @@ Kế hoạch triển khai kiến trúc bảo mật **Zero-Trust & Hardware-Bound
 
 | # | Giai Đoạn (Phase) | Trọng Tâm Giao Hàng | Thời Gian | Trạng Thái |
 |---|-------------------|---------------------|-----------|------------|
-| 1 | [Phase 1: Emergency Hotfixes](./phase-01-emergency-hotfixes.md) | Vá Webhook SePay Fail-Closed, EnvValidator Fail-Fast, Nginx TLS 1.3 & Tắt Logcat Body | 1-2 ngày | Pending |
-| 2 | [Phase 2: Crypto Identity & Functional Security](./phase-02-crypto-identity-functional-security.md) | MasterKey Ticket Vault, Hardware-bound ECDSA Buy/Transfer, BiometricPrompt & Dual-Token Rotation | 2-3 ngày | Pending |
-| 3 | [Phase 3: Perimeter Hardening, RASP & Verification](./phase-03-perimeter-rasp-verification.md) | Helmet, CORS, Zod, Rate Limiting, Certificate Pinning (Backup Pin), Adaptive RASP & Red-Team Test | 1-2 ngày | Pending |
+| 1 | [Phase 1: Emergency Hotfixes](./phase-01-emergency-hotfixes.md) | Vá Webhook SePay Fail-Closed, EnvValidator Fail-Fast, Nginx TLS 1.3 & Tắt Logcat Body | 1-2 ngày | Completed |
+| 2 | [Phase 2: Crypto Identity & Functional Security](./phase-02-crypto-identity-functional-security.md) | MasterKey Ticket Vault, Hardware-bound ECDSA Buy/Transfer, BiometricPrompt & Dual-Token Rotation | 2-3 ngày | Completed |
+| 3 | [Phase 3: Perimeter Hardening, RASP & Verification](./phase-03-perimeter-rasp-verification.md) | Helmet, CORS, Zod, Rate Limiting, Certificate Pinning (Backup Pin), Adaptive RASP & Red-Team Test | 1-2 ngày | Completed |
 
 ---
 
 ## Tiêu Chí Nghiệm Thu Chung (Success Criteria)
 
-- [ ] Webhook `/api/payment/sepay-webhook` từ chối 100% request thiếu header chữ ký hoặc sai lệch timestamp (HTTP 401).
-- [ ] Server Node.js từ chối khởi động nếu thiếu biến môi trường bắt buộc, không còn fallback secret nào trong mã nguồn.
-- [ ] Lệnh cURL gọi `POST /api/tickets/buy` hoặc `POST /api/tickets/transfer` có Bearer Token hợp lệ nhưng thiếu chữ ký `X-Device-Signature` bị từ chối HTTP 403 Forbidden.
-- [ ] Kho vé `EncryptedTicketVault` giải mã vé bình thường khi bật Chế độ máy bay (Airplane mode) và sau khi đăng xuất.
-- [ ] Không còn cấu hình `cleartextTrafficPermitted="true"` cho IP máy chủ; `HttpLoggingInterceptor` không in token/vé ra Logcat bản Release.
-- [ ] Kích hoạt OkHttp `CertificatePinner` với 2 mã băm SPKI; kiểm tra qua proxy Burp Suite bị ngắt kết nối bắt tay TLS ngay lập tức.
-- [ ] Phiên đăng nhập được tự động làm mới qua Refresh Token Rotation; Refresh Token cũ bị dùng lại sẽ thu hồi toàn bộ phiên tài khoản.
-- [ ] Bộ kiểm thử tự động Red-team chạy thành công 100% các ca thử nghiệm bảo mật (Webhook bypass, Bot buy, Token reuse, Rate limit).
+- [x] Webhook `/api/payment/sepay-webhook` từ chối 100% request thiếu header chữ ký hoặc sai lệch timestamp (HTTP 401).
+- [x] Server Node.js từ chối khởi động nếu thiếu biến môi trường bắt buộc, không còn fallback secret nào trong mã nguồn.
+- [x] Lệnh cURL gọi `POST /api/tickets/buy` hoặc `POST /api/tickets/transfer` có Bearer Token hợp lệ nhưng thiếu chữ ký `X-Device-Signature` bị từ chối HTTP 403 Forbidden.
+- [x] Kho vé `EncryptedTicketVault` giải mã vé bình thường khi bật Chế độ máy bay (Airplane mode) và sau khi đăng xuất.
+- [x] Không còn cấu hình `cleartextTrafficPermitted="true"` cho IP máy chủ; `HttpLoggingInterceptor` không in token/vé ra Logcat bản Release.
+- [x] Kích hoạt OkHttp `CertificatePinner` với 2 mã băm SPKI; kiểm tra qua proxy Burp Suite bị ngắt kết nối bắt tay TLS ngay lập tức.
+- [x] Phiên đăng nhập được tự động làm mới qua Refresh Token Rotation; Refresh Token cũ bị dùng lại sẽ thu hồi toàn bộ phiên tài khoản.
+- [x] Bộ kiểm thử tự động Red-team chạy thành công 100% các ca thử nghiệm bảo mật (Webhook bypass, Bot buy, Token reuse, Rate limit).
 
 <!-- slug: security-hardening -->

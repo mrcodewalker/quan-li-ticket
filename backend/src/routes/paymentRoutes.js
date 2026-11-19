@@ -19,7 +19,6 @@ const BANK_BIN = process.env.BANK_BIN || '970422';
 const BANK_ACCOUNT_NO = process.env.BANK_ACCOUNT_NO || '0696961698888';
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'MB BANK';
 const VIETQR_TEMPLATE = process.env.VIETQR_TEMPLATE || 'compact2';
-const PAYMENT_WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET || 'SecureTicket_Payment_Webhook_HMAC_Secret_2026';
 
 /**
  * Hàm hỗ trợ xuất vé an toàn sau khi thanh toán thành công
@@ -304,11 +303,15 @@ router.post('/webhook', async (req, res) => {
   }
 
   try {
+    const paymentSecret = process.env.PAYMENT_WEBHOOK_SECRET;
+    if (!paymentSecret) {
+      return res.status(500).json({ success: false, error: 'Webhook secret not configured.' });
+    }
     // Sắp xếp các khóa và tạo chuỗi HMAC chuẩn hóa
     const sortedKeys = Object.keys(data).sort();
     const signString = sortedKeys.map(k => `${k}=${data[k]}`).join('&');
     const expectedSignature = crypto
-      .createHmac('sha256', PAYMENT_WEBHOOK_SECRET)
+      .createHmac('sha256', paymentSecret)
       .update(signString)
       .digest('hex');
 
@@ -414,64 +417,60 @@ router.post('/sepay-webhook', async (req, res) => {
 
   console.log('[SePay Webhook] Received payload:', JSON.stringify(sepayData));
 
-  // 1. Kiểm tra xác thực HMAC-SHA256 (Khuyến nghị của SePay)
+  // Phase 1 (FR-01, FR-02, FR-03): Bắt buộc xác thực Fail-Closed HMAC-SHA256 & Chống Replay Attack
   const sepaySigHeader = req.headers['x-sepay-signature'];
   const sepayTimestamp = req.headers['x-sepay-timestamp'];
-  const webhookSecret = process.env.SEPAY_WEBHOOK_SECRET || process.env.PAYMENT_WEBHOOK_SECRET || 'SecureTicket_Payment_Webhook_HMAC_Secret_2026';
+  const webhookSecret = process.env.SEPAY_WEBHOOK_SECRET || process.env.PAYMENT_WEBHOOK_SECRET;
 
-  if (sepaySigHeader && sepayTimestamp) {
-    // Chống Replay Attack: kiểm tra timestamp không được lệch quá 5 phút (300 giây)
-    const currentTime = Math.floor(Date.now() / 1000);
-    const reqTime = parseInt(sepayTimestamp, 10);
-    if (Math.abs(currentTime - reqTime) > 300) {
-      await logSecurityEvent({
-        action: 'SEPAY_WEBHOOK_REPLAY_ATTACK',
-        severity: 'HIGH',
-        ipAddress: ip,
-        userAgent,
-        details: { currentTime, reqTime }
-      });
-      return res.status(401).json({ success: false, error: 'Webhook timestamp expired (Replay Attack blocked).' });
-    }
-
-    // Tính toán lại chữ ký HMAC-SHA256 theo chuẩn SePay: {timestamp}.{raw_body}
-    const rawBody = req.rawBody || JSON.stringify(req.body);
-    const dataToSign = `${sepayTimestamp}.${rawBody}`;
-    const computedHash = crypto.createHmac('sha256', webhookSecret).update(dataToSign).digest('hex');
-    const expectedSig = `sha256=${computedHash}`;
-
-    // So sánh an toàn chống Timing Attack
-    const sigBuf = Buffer.from(sepaySigHeader);
-    const expBuf = Buffer.from(expectedSig);
-
-    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-      await logSecurityEvent({
-        action: 'SEPAY_WEBHOOK_INVALID_SIGNATURE',
-        severity: 'CRITICAL',
-        ipAddress: ip,
-        userAgent,
-        details: { received: sepaySigHeader, expected: expectedSig }
-      });
-      return res.status(401).json({ success: false, error: 'Chữ ký HMAC-SHA256 không hợp lệ!' });
-    }
-    console.log('[SePay Webhook] HMAC-SHA256 signature verified successfully!');
-  } else {
-    // 2. Tùy chọn kiểm tra API Key nếu người dùng cấu hình dạng API Key
-    const expectedApiKey = process.env.SEPAY_API_KEY;
-    if (expectedApiKey) {
-      const authHeader = req.headers['authorization'] || '';
-      if (!authHeader.includes(expectedApiKey)) {
-        await logSecurityEvent({
-          action: 'SEPAY_WEBHOOK_UNAUTHORIZED',
-          severity: 'WARNING',
-          ipAddress: ip,
-          userAgent,
-          details: { receivedAuth: authHeader }
-        });
-        return res.status(401).json({ success: false, error: 'Unauthorized SePay API Key' });
-      }
-    }
+  if (!sepaySigHeader || !sepayTimestamp || !webhookSecret) {
+    await logSecurityEvent({
+      action: 'SEPAY_WEBHOOK_UNAUTHORIZED',
+      severity: 'CRITICAL',
+      ipAddress: ip,
+      userAgent,
+      details: { hasSignature: !!sepaySigHeader, hasTimestamp: !!sepayTimestamp }
+    });
+    return res.status(401).json({
+      success: false,
+      error: 'Chữ ký x-sepay-signature, x-sepay-timestamp và cấu hình bí mật là bắt buộc (Fail-Closed).'
+    });
   }
+
+  // Chống Replay Attack: kiểm tra timestamp không được lệch quá 5 phút (300 giây)
+  const currentTime = Math.floor(Date.now() / 1000);
+  const reqTime = parseInt(sepayTimestamp, 10);
+  if (Number.isNaN(reqTime) || Math.abs(currentTime - reqTime) > 300) {
+    await logSecurityEvent({
+      action: 'SEPAY_WEBHOOK_REPLAY_ATTACK',
+      severity: 'HIGH',
+      ipAddress: ip,
+      userAgent,
+      details: { currentTime, reqTime }
+    });
+    return res.status(401).json({ success: false, error: 'Webhook timestamp expired (Replay Attack blocked).' });
+  }
+
+  // Tính toán lại chữ ký HMAC-SHA256 theo chuẩn SePay: {timestamp}.{raw_body}
+  const rawBody = req.rawBody || JSON.stringify(req.body);
+  const dataToSign = `${sepayTimestamp}.${rawBody}`;
+  const computedHash = crypto.createHmac('sha256', webhookSecret).update(dataToSign).digest('hex');
+  const expectedSig = `sha256=${computedHash}`;
+
+  // So sánh an toàn chống Timing Attack
+  const sigBuf = Buffer.from(String(sepaySigHeader));
+  const expBuf = Buffer.from(expectedSig);
+
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    await logSecurityEvent({
+      action: 'SEPAY_WEBHOOK_INVALID_SIGNATURE',
+      severity: 'CRITICAL',
+      ipAddress: ip,
+      userAgent,
+      details: { received: sepaySigHeader }
+    });
+    return res.status(401).json({ success: false, error: 'Chữ ký HMAC-SHA256 không hợp lệ!' });
+  }
+  console.log('[SePay Webhook] HMAC-SHA256 signature verified successfully!');
 
   // Kiểm tra loại giao dịch: chỉ xử lý "in" (tiền vào)
   if (sepayData.transferType && sepayData.transferType.toLowerCase() !== 'in') {

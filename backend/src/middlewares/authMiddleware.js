@@ -1,4 +1,7 @@
 import jwt from 'jsonwebtoken';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 export function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -11,11 +14,20 @@ export function authenticateToken(req, res, next) {
     });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET || 'SecureTicket2026_TopSecretJwtKey!#998244353', (err, user) => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    return res.status(500).json({
+      success: false,
+      error: 'Server JWT configuration missing.'
+    });
+  }
+
+  jwt.verify(token, secret, (err, user) => {
     if (err) {
-      return res.status(403).json({
+      // Trả về 401 để OkHttp TokenAuthenticator tự động gọi /api/auth/refresh xoay vòng token
+      return res.status(401).json({
         success: false,
-        error: 'Invalid or expired token.'
+        error: 'Invalid or expired access token.'
       });
     }
     req.user = user;
@@ -36,8 +48,7 @@ export function authorizeRoles(...roles) {
 }
 
 export function getClientInfo(req) {
-  const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || null;
-  const userAgent = req.headers['user-agent'] || null;
+  const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1';
+  const userAgent = req.headers['user-agent'] || 'Unknown';
   return { ip, userAgent };
 }
-

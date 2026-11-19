@@ -11,11 +11,12 @@ data class ApiResponse<T>(
     @SerializedName("data") val data: T? = null
 )
 
-// --- Auth Models ---
+// --- Auth & Dual-Token Models ---
 data class User(
     @SerializedName("id") val id: String,
     @SerializedName("email") val email: String,
-    @SerializedName("fullName") val fullName: String,
+    @SerializedName(value = "fullName", alternate = ["full_name"]) val fullName: String,
+    @SerializedName("phone") val phone: String? = null,
     @SerializedName("role") val role: String,
     @SerializedName("isDeviceBound") val isDeviceBound: Boolean = false
 )
@@ -28,7 +29,22 @@ data class LoginRequest(
 data class LoginData(
     @SerializedName("accessToken") val accessToken: String,
     @SerializedName("refreshToken") val refreshToken: String,
+    @SerializedName("expiresIn") val expiresIn: Int = 900,
     @SerializedName("user") val user: User
+)
+
+data class RefreshTokenRequest(
+    @SerializedName("refreshToken") val refreshToken: String
+)
+
+data class RefreshTokenData(
+    @SerializedName("accessToken") val accessToken: String,
+    @SerializedName("refreshToken") val refreshToken: String,
+    @SerializedName("expiresIn") val expiresIn: Int = 900
+)
+
+data class LogoutRequest(
+    @SerializedName("refreshToken") val refreshToken: String?
 )
 
 data class RegisterRequest(
@@ -65,8 +81,10 @@ data class Ticket(
     @SerializedName(value = "event_title", alternate = ["eventTitle"]) val eventTitle: String? = null,
     @SerializedName(value = "event_location", alternate = ["eventLocation", "location"]) val eventLocation: String? = null,
     @SerializedName(value = "event_start_time", alternate = ["eventStartTime", "startTime"]) val eventStartTime: String? = null,
+    @SerializedName(value = "current_owner_id", alternate = ["currentOwnerId", "ownerId"]) val currentOwnerId: String? = null,
     @SerializedName(value = "status", alternate = ["ticketStatus"]) val status: String? = "ACTIVE",
     @SerializedName(value = "issued_at", alternate = ["issuedAt"]) val issuedAt: String? = null,
+    @SerializedName(value = "issued_timestamp", alternate = ["issuedTimestamp"]) val issuedTimestamp: Long? = null,
     @SerializedName(value = "server_signature", alternate = ["serverSignature"]) val serverSignature: String = "",
     @SerializedName(value = "nonce") val nonce: String = "",
     @SerializedName(value = "qr_secret_seed", alternate = ["qrSecretSeed"]) val qrSecretSeed: String? = null,
@@ -75,7 +93,10 @@ data class Ticket(
 
 data class BuyTicketRequest(
     @SerializedName("eventId") val eventId: String,
-    @SerializedName("passToken") val passToken: String? = null
+    @SerializedName("passToken") val passToken: String? = null,
+    @SerializedName("clientNonce") val clientNonce: String? = null,
+    @SerializedName("timestamp") val timestamp: Long? = null,
+    @SerializedName("deviceSignature") val deviceSignature: String? = null
 )
 
 // --- Queue / Virtual Waiting Room Models ---
@@ -103,7 +124,10 @@ data class DynamicQrData(
 
 data class TransferTicketRequest(
     @SerializedName("ticketId") val ticketId: String,
-    @SerializedName("recipientEmail") val recipientEmail: String
+    @SerializedName("recipientEmail") val recipientEmail: String,
+    @SerializedName("clientNonce") val clientNonce: String? = null,
+    @SerializedName("timestamp") val timestamp: Long? = null,
+    @SerializedName("deviceSignature") val deviceSignature: String? = null
 )
 
 // --- Validation Models ---
@@ -114,7 +138,10 @@ data class ValidateQrRequest(
 // --- Payment & VietQR Models ---
 data class CreateOrderRequest(
     @SerializedName("eventId") val eventId: String,
-    @SerializedName("passToken") val passToken: String? = null
+    @SerializedName("passToken") val passToken: String? = null,
+    @SerializedName("clientNonce") val clientNonce: String? = null,
+    @SerializedName("timestamp") val timestamp: Long? = null,
+    @SerializedName("deviceSignature") val deviceSignature: String? = null
 )
 
 data class CreateOrderData(
@@ -178,4 +205,3 @@ data class ServerCryptoData(
     @SerializedName("publicKeyPem") val publicKeyPem: String,
     @SerializedName("publicKeyBase64") val publicKeyBase64: String
 )
-

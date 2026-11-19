@@ -33,14 +33,20 @@ import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.CreateOrderData
 import com.example.quan_ly_ticket.data.model.CreateOrderRequest
 import com.example.quan_ly_ticket.data.model.Event
+import com.example.quan_ly_ticket.data.model.LogoutRequest
+import com.example.quan_ly_ticket.data.model.RefreshTokenRequest
 import com.example.quan_ly_ticket.data.model.Ticket
+import com.example.quan_ly_ticket.security.KeystoreManager
 import com.example.quan_ly_ticket.security.SecurityCheck
 import com.example.quan_ly_ticket.ui.components.GlassCard
 import com.example.quan_ly_ticket.ui.components.NavigationTab
 import com.example.quan_ly_ticket.ui.components.PremiumPillSwitch
 import com.example.quan_ly_ticket.ui.components.SecureBottomNav
 import com.example.quan_ly_ticket.ui.theme.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.UUID
 
 @Composable
 fun HomeScreen(
@@ -48,6 +54,7 @@ fun HomeScreen(
     onProceedToPayment: (order: CreateOrderData) -> Unit,
     onOpenScanner: () -> Unit,
     onOpenCryptoLab: () -> Unit,
+    onRequireBiometric: (title: String, subtitle: String, onVerified: () -> Unit) -> Unit = { _, _, ok -> ok() },
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
@@ -112,6 +119,7 @@ fun HomeScreen(
     AppBackground {
         Scaffold(
             containerColor = Color.Transparent,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
                 SecureBottomNav(
                     currentTab = currentTab,
@@ -170,17 +178,34 @@ fun HomeScreen(
                             }
                         },
                         onBuyEvent = { eventId ->
-                            scope.launch {
-                                try {
-                                    val api = ApiClient.getService(context)
-                                    val res = api.createPaymentOrder(CreateOrderRequest(eventId))
-                                    if (res.isSuccessful && res.body()?.success == true && res.body()?.data != null) {
-                                        onProceedToPayment(res.body()!!.data!!)
-                                    } else {
-                                        Toast.makeText(context, res.body()?.error ?: "Lỗi tạo đơn đặt vé", Toast.LENGTH_SHORT).show()
+                            onRequireBiometric(
+                                "Xác nhận Đặt mua Vé",
+                                "Xác thực sinh trắc học để ký lệnh đặt mua vé bằng khóa phần cứng TEE"
+                            ) {
+                                scope.launch {
+                                    try {
+                                        val clientNonce = UUID.randomUUID().toString().replace("-", "")
+                                        val timestamp = System.currentTimeMillis() / 1000L
+                                        val deviceSig = withContext(Dispatchers.Default) {
+                                            KeystoreManager.signBuyPayload(eventId, clientNonce, timestamp)
+                                        }
+                                        val api = ApiClient.getService(context)
+                                        val res = api.createPaymentOrder(
+                                            CreateOrderRequest(
+                                                eventId = eventId,
+                                                clientNonce = clientNonce,
+                                                timestamp = timestamp,
+                                                deviceSignature = deviceSig
+                                            )
+                                        )
+                                        if (res.isSuccessful && res.body()?.success == true && res.body()?.data != null) {
+                                            onProceedToPayment(res.body()!!.data!!)
+                                        } else {
+                                            Toast.makeText(context, res.body()?.error ?: "Lỗi tạo đơn đặt vé", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
                                     }
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -194,6 +219,7 @@ fun HomeScreen(
                     NavigationTab.SETTINGS -> SettingsView(
                         userName = userName,
                         userEmail = userEmail,
+                        securePrefs = securePrefs,
                         biometricEnabled = biometricEnabled,
                         onToggleBiometric = { biometricEnabled = it },
                         securityAlertsEnabled = securityAlertsEnabled,
@@ -203,8 +229,18 @@ fun HomeScreen(
                         logoutConfirmPending = logoutConfirmPending,
                         onLogoutClick = {
                             if (logoutConfirmPending) {
-                                securePrefs.clear()
-                                onLogout()
+                                scope.launch {
+                                    try {
+                                        val refreshTok = securePrefs.getRefreshToken()
+                                        if (!refreshTok.isNullOrBlank()) {
+                                            ApiClient.getService(context).logout(LogoutRequest(refreshTok))
+                                        }
+                                    } catch (_: Exception) {
+                                    } finally {
+                                        securePrefs.clear()
+                                        onLogout()
+                                    }
+                                }
                             } else {
                                 logoutConfirmPending = true
                             }
@@ -276,7 +312,7 @@ private fun HomeMainView(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Status bar space filler
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Header: Greeting + Avatar Button
         Row(
@@ -759,7 +795,7 @@ private fun TicketsWalletView(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Header: Title + Search button
         Row(
@@ -1214,6 +1250,7 @@ private fun TicketsWalletView(
 private fun SettingsView(
     userName: String,
     userEmail: String,
+    securePrefs: SecurePreferences,
     biometricEnabled: Boolean,
     onToggleBiometric: (Boolean) -> Unit,
     securityAlertsEnabled: Boolean,
@@ -1225,6 +1262,16 @@ private fun SettingsView(
     onOpenServerConfig: () -> Unit,
     onOpenCryptoLab: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var accessSnippet by remember {
+        mutableStateOf(securePrefs.getAccessToken()?.let { "${it.take(16)}...${it.takeLast(8)}" } ?: "Chưa cấp")
+    }
+    var refreshSnippet by remember {
+        mutableStateOf(securePrefs.getRefreshToken()?.let { "${it.take(16)}...${it.takeLast(8)}" } ?: "Chưa cấp")
+    }
+    var rotationCount by remember { mutableIntStateOf(securePrefs.getRefreshRotationCount()) }
+    var isRotating by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1232,7 +1279,7 @@ private fun SettingsView(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Header
         Column {
@@ -1308,6 +1355,132 @@ private fun SettingsView(
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.8f)
                 )
+            }
+        }
+
+        // PHIÊN ĐĂNG NHẬP DUAL-TOKEN & MÃ HÓA PII Section
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text(
+                text = "PHIÊN DUAL-TOKEN & MÃ HÓA KHÁCH HÀNG (PII)",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFF747C8C),
+                letterSpacing = 0.7.sp,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+
+            GlassCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VpnKey,
+                                contentDescription = null,
+                                tint = PrimaryBlue,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Access Token (15m) & Refresh (7d)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = TextDark
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFFEAF4FF)
+                        ) {
+                            Text(
+                                text = "XOAY VÒNG: $rotationCount LẦN",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = PrimaryBlue,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "• Access JWT: $accessSnippet",
+                        fontSize = 10.sp,
+                        color = TextMuted
+                    )
+                    Text(
+                        text = "• Refresh Token: $refreshSnippet",
+                        fontSize = 10.sp,
+                        color = Color(0xFF16836F)
+                    )
+                    Text(
+                        text = "• Hồ sơ KH (PII): Đã mã hóa AES-256-GCM & AES-256-SIV trong TEE",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PrimaryNavy
+                    )
+
+                    Button(
+                        onClick = {
+                            isRotating = true
+                            scope.launch {
+                                try {
+                                    val rTok = securePrefs.getRefreshToken()
+                                    if (!rTok.isNullOrBlank()) {
+                                        val res = ApiClient.getService(context).refreshToken(RefreshTokenRequest(rTok))
+                                        if (res.isSuccessful && res.body()?.success == true && res.body()?.data != null) {
+                                            val d = res.body()!!.data!!
+                                            securePrefs.saveAuthTokens(d.accessToken, d.refreshToken, d.expiresIn)
+                                            rotationCount = securePrefs.incrementRefreshRotationCount()
+                                            accessSnippet = "${d.accessToken.take(16)}...${d.accessToken.takeLast(8)}"
+                                            refreshSnippet = "${d.refreshToken.take(16)}...${d.refreshToken.takeLast(8)}"
+                                            Toast.makeText(
+                                                context,
+                                                "Đã xoay vòng cặp Access & Refresh Token mới!",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            Toast.makeText(
+                                                context,
+                                                res.body()?.error ?: "Không thể làm mới token",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    } else {
+                                        Toast.makeText(context, "Chưa có Refresh Token", Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    isRotating = false
+                                }
+                            }
+                        },
+                        enabled = !isRotating,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isRotating) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
+                        } else {
+                            Icon(Icons.Default.Autorenew, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Làm mới & Xoay vòng Token ngay (Refresh Rotation)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         }
 

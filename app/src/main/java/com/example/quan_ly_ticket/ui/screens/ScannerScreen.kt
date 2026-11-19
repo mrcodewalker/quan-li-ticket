@@ -130,7 +130,8 @@ fun ScannerScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(top = 6.dp)
         ) {
             // Header: Back, Title, Flash toggle
             Row(

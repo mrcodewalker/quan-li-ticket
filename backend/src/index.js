@@ -1,9 +1,11 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { validateEnv } from './config/envValidator.js';
 import { testDbConnection } from './config/db.js';
 import { initializeKeys } from './services/cryptoService.js';
-import authRoutes from './routes/authRoutes.js';
+import { securityHeadersMiddleware } from './middlewares/securityMiddleware.js';
+import authRoutes, { ensureRefreshTokenTable } from './routes/authRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
 import ticketRoutes from './routes/ticketRoutes.js';
 import validationRoutes from './routes/validationRoutes.js';
@@ -12,15 +14,30 @@ import queueRoutes from './routes/queueRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 
 dotenv.config();
+validateEnv();
 
-const app = express();
+export const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// Phase 3 (FR-14): HTTP Security Headers (HSTS, CSP, nosniff, Frame DENY)
+app.use(securityHeadersMiddleware);
+
+// Phase 3 (FR-15): Strict CORS Policy
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:5000', 'http://10.0.2.2:5000', 'https://api.secureticket.vn'];
+
 app.use(cors({
-  origin: '*', // Trong môi trường production chỉ định rõ domain hoặc Android app package
+  origin: (origin, callback) => {
+    // Cho phép Android Native App (không gửi Origin header) hoặc các Origin trong Whitelist
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS policy blocked this origin'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Signature', 'x-sepay-signature', 'x-sepay-timestamp']
 }));
 
 app.use(express.json({
@@ -30,14 +47,6 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true }));
-
-// Security Header cơ bản
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  next();
-});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -58,7 +67,10 @@ app.get('/health', (req, res) => {
       ecdsaP256: true,
       dynamicTOTP: true,
       deviceBinding: true,
-      antiReplay: true
+      antiReplay: true,
+      dualTokenRotation: true,
+      customerPiiEncryption: 'AES-256-GCM',
+      webhookFailClosed: true
     }
   });
 });
@@ -70,26 +82,31 @@ app.use((req, res) => {
 
 // Global Error Handler
 app.use((err, req, res, next) => {
+  if (err && err.message === 'CORS policy blocked this origin') {
+    return res.status(403).json({ success: false, error: err.message });
+  }
   console.error('[Unhandled Error]', err);
   res.status(500).json({ success: false, error: 'Internal Server Error' });
 });
 
-// Start Server
-async function startServer() {
-  try {
-    console.log('--- Starting SecureTicket Server ---');
-    await testDbConnection();
-    await initializeKeys();
+// Start Server when executed directly
+if (process.env.NODE_ENV !== 'test') {
+  async function startServer() {
+    try {
+      console.log('--- Starting SecureTicket Server (Hardened Phase 1-3) ---');
+      await testDbConnection();
+      await ensureRefreshTokenTable();
+      await initializeKeys();
 
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`[Server] SecureTicket Backend listening on http://0.0.0.0:${PORT}`);
-      console.log(`[Server] Health check available at http://localhost:${PORT}/health`);
-    });
-  } catch (err) {
-    console.error('[Server] Fatal startup error:', err);
-    process.exit(1);
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log(`[Server] SecureTicket Backend listening on http://0.0.0.0:${PORT}`);
+        console.log(`[Server] Health check available at http://localhost:${PORT}/health`);
+      });
+    } catch (err) {
+      console.error('[Server] Fatal startup error:', err);
+      process.exit(1);
+    }
   }
+
+  startServer();
 }
-
-startServer();
-
