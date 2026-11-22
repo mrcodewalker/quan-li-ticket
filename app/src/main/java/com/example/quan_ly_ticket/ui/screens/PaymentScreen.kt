@@ -36,7 +36,6 @@ import com.example.quan_ly_ticket.data.api.ApiClient
 import com.example.quan_ly_ticket.data.local.EncryptedTicketVault
 import com.example.quan_ly_ticket.data.model.CancelOrderRequest
 import com.example.quan_ly_ticket.data.model.CreateOrderData
-import com.example.quan_ly_ticket.data.model.SimulatePaymentRequest
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.security.CryptoHelper
 import com.example.quan_ly_ticket.ui.components.FrostedIconButton
@@ -64,10 +63,32 @@ fun PaymentScreen(
 
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var remainingSeconds by remember { mutableIntStateOf(order.ttlSeconds) }
-    var isSimulating by remember { mutableStateOf(false) }
+    var isPollingManual by remember { mutableStateOf(false) }
     var paymentStatusText by remember { mutableStateOf("Đang chờ thanh toán chuyển khoản...") }
     var successTicket by remember { mutableStateOf<Ticket?>(null) }
     var successVia by remember { mutableStateOf("Chuyển khoản Napas 247 · SePay") }
+
+    fun enrichTicket(raw: Ticket): Ticket {
+        return raw.copy(
+            eventTitle = raw.eventTitle ?: order.eventTitle,
+            eventId = raw.eventId ?: order.eventId,
+            seatZone = raw.seatZone ?: order.seatZone,
+            seatNumber = raw.seatNumber ?: order.seatNumber
+        )
+    }
+
+    suspend fun persistTicketToVault(ticket: Ticket) {
+        withContext(Dispatchers.IO) {
+            try {
+                val existing = ticketVault.loadTicketsDecrypted().toMutableList()
+                existing.removeAll { it.id == ticket.id }
+                existing.add(0, ticket)
+                ticketVault.saveTicketsEncrypted(existing)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
 
     fun copyToClipboard(label: String, text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -125,35 +146,20 @@ fun PaymentScreen(
                     if (statusData.status == "PAID" && statusData.ticket != null) {
                         paymentStatusText = "Thanh toán thành công! Đang chuyển đến vé..."
                         var fullTicket = statusData.ticket
-                        
-                        // Đảm bảo thông tin sự kiện đầy đủ cho vé
+
                         if (fullTicket.eventTitle.isNullOrEmpty()) {
                             try {
                                 val myTicketsRes = api.getMyTickets()
                                 if (myTicketsRes.isSuccessful && myTicketsRes.body()?.success == true) {
-                                    val matched = myTicketsRes.body()!!.data?.find { it.id == fullTicket.id || (it.ticketCode.isNotEmpty() && it.ticketCode == fullTicket.ticketCode) }
+                                    val matched = myTicketsRes.body()!!.data?.find {
+                                        it.id == fullTicket.id || (it.ticketCode.isNotEmpty() && it.ticketCode == fullTicket.ticketCode)
+                                    }
                                     if (matched != null) fullTicket = matched
                                 }
                             } catch (_: Exception) {}
                         }
-                        if (fullTicket.eventTitle.isNullOrEmpty()) {
-                            fullTicket = fullTicket.copy(
-                                eventTitle = order.eventTitle,
-                                eventId = order.eventId
-                            )
-                        }
-
-                        // Lưu vé vào Encrypted Vault trên IO thread để không block UI animation
-                        withContext(Dispatchers.IO) {
-                            try {
-                                val existing = ticketVault.loadTicketsDecrypted().toMutableList()
-                                existing.removeAll { it.id == fullTicket.id }
-                                existing.add(0, fullTicket)
-                                ticketVault.saveTicketsEncrypted(existing)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
+                        fullTicket = enrichTicket(fullTicket)
+                        persistTicketToVault(fullTicket)
 
                         successVia = "Chuyển khoản Napas 247 · SePay"
                         successTicket = fullTicket
@@ -166,7 +172,6 @@ fun PaymentScreen(
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                // Tiếp tục thử lại ở chu kỳ tiếp theo
             }
         }
     }
@@ -186,12 +191,7 @@ fun PaymentScreen(
                     FrostedIconButton(
                         icon = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Quay lại",
-                        onClick = {
-                            scope.launch {
-                                try { ApiClient.getService(context).cancelOrder(CancelOrderRequest(order.orderId)) } catch (_: Exception) {}
-                                onCancel()
-                            }
-                        }
+                        onClick = onCancel
                     )
                     Text(
                         text = "Thanh toán",
@@ -272,6 +272,22 @@ fun PaymentScreen(
                     fontFamily = FontFamily.Monospace,
                     color = TextSubtle
                 )
+                if (!order.seatZone.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = InfoBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, InfoBorder)
+                    ) {
+                        Text(
+                            text = "Ghế đã giữ: ${order.seatZone} · Ghế ${order.seatNumber ?: "--"}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = InfoFg,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -440,69 +456,83 @@ fun PaymentScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Primary Action
+            // 4-Stage Live Cryptographic Payment Pipeline
+            GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Tiến trình Thanh toán",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = TextDark
+                    )
+                    val stage3Done = successTicket != null
+                    listOf(
+                        Triple("1. Xác thực & giữ ghế", "Đã khóa chỗ an toàn cho bạn", true),
+                        Triple("2. Tạo mã VietQR", "Sẵn sàng quét bằng app ngân hàng", true),
+                        Triple("3. Chờ xác nhận thanh toán", paymentStatusText, stage3Done),
+                        Triple("4. Phát hành vé điện tử", "Tự động đưa vé vào ví của bạn", stage3Done)
+                    ).forEach { (title, sub, done) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (done) Icons.Default.CheckCircle else Icons.Default.Schedule,
+                                contentDescription = null,
+                                tint = if (done) AccentMint else PrimaryBlue,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(title, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextDark)
+                                Text(sub, fontSize = 10.sp, color = TextMuted)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Primary Action: Poll order status immediately
             Button(
                 onClick = {
-                    isSimulating = true
+                    isPollingManual = true
                     scope.launch {
                         try {
                             val api = ApiClient.getService(context)
-                            val simRes = api.simulatePayment(SimulatePaymentRequest(orderId = order.orderId))
-                            if (simRes.isSuccessful && simRes.body()?.success == true) {
-                                var ticket = simRes.body()!!.data
-                                if (ticket != null) {
-                                    if (ticket.eventTitle.isNullOrEmpty()) {
-                                        try {
-                                            val myTicketsRes = api.getMyTickets()
-                                            if (myTicketsRes.isSuccessful && myTicketsRes.body()?.success == true) {
-                                                val matched = myTicketsRes.body()!!.data?.find { it.id == ticket.id || (it.ticketCode.isNotEmpty() && it.ticketCode == ticket.ticketCode) }
-                                                if (matched != null) ticket = matched
-                                            }
-                                        } catch (_: Exception) {}
-                                    }
-                                    if (ticket.eventTitle.isNullOrEmpty()) {
-                                        ticket = ticket.copy(
-                                            eventTitle = order.eventTitle,
-                                            eventId = order.eventId
-                                        )
-                                    }
-
-                                    withContext(Dispatchers.IO) {
-                                        try {
-                                            val existing = ticketVault.loadTicketsDecrypted().toMutableList()
-                                            existing.removeAll { it.id == ticket.id }
-                                            existing.add(0, ticket)
-                                            ticketVault.saveTicketsEncrypted(existing)
-                                        } catch (e: Exception) {
-                                            e.printStackTrace()
-                                        }
-                                    }
-
-                                    successVia = "Chuyển khoản nhanh Napas 247"
-                                    successTicket = ticket
+                            val statusRes = api.getOrderStatus(order.orderId)
+                            if (statusRes.isSuccessful && statusRes.body()?.success == true) {
+                                val data = statusRes.body()!!.data!!
+                                if (data.status == "PAID" && data.ticket != null) {
+                                    val enriched = enrichTicket(data.ticket)
+                                    persistTicketToVault(enriched)
+                                    successVia = "Chuyển khoản Napas 247 · SePay"
+                                    successTicket = enriched
+                                } else {
+                                    Toast.makeText(context, "Trạng thái hiện tại: ${data.status}. Hệ thống vẫn đang lắng nghe Webhook.", Toast.LENGTH_SHORT).show()
                                 }
                             } else {
-                                Toast.makeText(context, simRes.body()?.error ?: "Không thể xác nhận thanh toán", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, statusRes.body()?.error ?: "Không thể kiểm tra đơn hàng", Toast.LENGTH_SHORT).show()
                             }
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                             Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
                         } finally {
-                            isSimulating = false
+                            isPollingManual = false
                         }
                     }
                 },
-                enabled = !isSimulating,
+                enabled = !isPollingManual,
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                 modifier = Modifier.fillMaxWidth().height(50.dp)
             ) {
-                if (isSimulating) {
+                if (isPollingManual) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 } else {
-                    Text("Xác nhận đã chuyển khoản", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("Kiểm tra trạng thái giao dịch ngay", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
 

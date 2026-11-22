@@ -14,12 +14,20 @@ import {
 } from '../services/cryptoService.js';
 import { verifyCheckoutPass, cleanAndPromoteQueue } from '../services/queueService.js';
 import { logSecurityEvent } from '../services/auditService.js';
+import { MAX_ACTIVE_TICKETS_PER_EVENT, parseTicketSeat } from '../config/ticketTiers.js';
 
 const router = express.Router();
 
 // Chính sách Chống Phe Vé (Anti-Scalping) & Chống Đầu Cơ
 const MAX_TRANSFERS_PER_TICKET = 2;
-const MAX_ACTIVE_TICKETS_PER_EVENT = 6;
+
+function maskEmail(rawEmail) {
+  const parts = String(rawEmail || '').split('@');
+  if (parts.length === 2) {
+    return `${parts[0].slice(0, 3)}***@${parts[1]}`;
+  }
+  return '***';
+}
 
 function maskPhone(rawPhone) {
   const plain = decryptCustomerPII(rawPhone) || rawPhone || '0988765432';
@@ -71,7 +79,8 @@ router.post(
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
-    if (Math.abs(nowSec - Number(timestamp)) > 60) {
+    const buyTs = Number(timestamp);
+    if (!Number.isFinite(buyTs) || Math.abs(nowSec - buyTs) > 60) {
       return res.status(403).json({
         success: false,
         error: 'Chữ ký giao dịch mua vé đã hết hạn (> 60s). Vui lòng thử lại.'
@@ -136,6 +145,33 @@ router.post(
         [req.user.id]
       );
       const user = userRows[0];
+
+      // Chống đầu cơ: Tối đa 6 vé active / đơn pending trên 1 sự kiện
+      const [activeTicketCnt] = await conn.execute(
+        `SELECT COUNT(*) as cnt FROM tickets WHERE current_owner_id = ? AND event_id = ? AND status = 'ACTIVE'`,
+        [req.user.id, eventId]
+      );
+      const [pendingOrderCnt] = await conn.execute(
+        `SELECT COUNT(*) as cnt FROM orders WHERE user_id = ? AND event_id = ? AND status = 'PENDING' AND expires_at > NOW()`,
+        [req.user.id, eventId]
+      );
+      const userEventTotal = Number(activeTicketCnt[0]?.cnt || 0) + Number(pendingOrderCnt[0]?.cnt || 0);
+      if (userEventTotal >= MAX_ACTIVE_TICKETS_PER_EVENT) {
+        await conn.rollback();
+        await logSecurityEvent({
+          userId: req.user.id,
+          action: 'ANTI_SCALPING_QUOTA_BLOCKED',
+          severity: 'WARNING',
+          ipAddress: ip,
+          userAgent,
+          details: { eventId, userEventTotal, maxAllowed: MAX_ACTIVE_TICKETS_PER_EVENT }
+        });
+        return res.status(403).json({
+          success: false,
+          errorCode: 'ANTI_SCALPING_QUOTA_EXCEEDED',
+          error: `Chính sách Chống Đầu Cơ (Anti-Scalping): Mỗi tài khoản chỉ được sở hữu tối đa ${MAX_ACTIVE_TICKETS_PER_EVENT} vé cho sự kiện này.`
+        });
+      }
 
       // Nếu tài khoản đã bind khóa thiết bị, xác minh chữ ký ECDSA P-256 trên chuỗi BUY:<eventId>:<nonce>:<timestamp>
       if (user && user.device_public_key) {
@@ -451,7 +487,8 @@ router.post(
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
-    if (Math.abs(nowSec - Number(timestamp)) > 60) {
+    const buyTs = Number(timestamp);
+    if (!Number.isFinite(buyTs) || Math.abs(nowSec - buyTs) > 60) {
       return res.status(403).json({
         success: false,
         error: 'Chữ ký chuyển nhượng vé đã quá hạn 60 giây (Replay blocked).'
@@ -637,6 +674,198 @@ router.post(
     }
   }
 );
+
+/**
+ * Truy xuất Chuỗi Nguồn gốc & Chứng thư số ECDSA P-256 của vé (Provenance Chain)
+ * GET /api/tickets/:id/provenance
+ */
+router.get('/:id/provenance', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const isStaff = ['STAFF', 'ADMIN', 'ORGANIZER'].includes(req.user.role);
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT t.*, orig.full_name as original_owner_name, orig.email as original_owner_email,
+              curr.full_name as current_owner_name, curr.email as current_owner_email
+       FROM tickets t
+       LEFT JOIN users orig ON t.original_owner_id = orig.id
+       LEFT JOIN users curr ON t.current_owner_id = curr.id
+       WHERE t.id = ?`,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Ticket not found.' });
+    }
+
+    const ticket = rows[0];
+    if (ticket.current_owner_id !== req.user.id && ticket.original_owner_id !== req.user.id && !isStaff) {
+      return res.status(403).json({ success: false, error: 'Access denied.' });
+    }
+
+    const [transferRows] = await pool.execute(
+      `SELECT tt.id, tt.transfer_signature, tt.status, tt.transferred_at,
+              fu.full_name as from_name, fu.email as from_email,
+              tu.full_name as to_name, tu.email as to_email
+       FROM ticket_transfers tt
+       LEFT JOIN users fu ON tt.from_user_id = fu.id
+       LEFT JOIN users tu ON tt.to_user_id = tu.id
+       WHERE tt.ticket_id = ?
+       ORDER BY tt.transferred_at ASC`,
+      [id]
+    );
+
+    const issuedTimestamp = ticket.issued_timestamp || Math.floor(new Date(ticket.issued_at).getTime() / 1000);
+    const canonicalString = createTicketCanonicalString(
+      ticket.id,
+      ticket.event_id,
+      ticket.current_owner_id,
+      ticket.nonce,
+      issuedTimestamp
+    );
+    const { seatZone, seatNumber } = parseTicketSeat(ticket.ticket_code);
+
+    res.json({
+      success: true,
+      data: {
+        ticketId: ticket.id,
+        ticketCode: ticket.ticket_code,
+        status: ticket.status,
+        seatZone,
+        seatNumber,
+        canonicalString,
+        serverSignature: ticket.server_signature,
+        deviceBoundPublicKey: ticket.device_bound_public_key || null,
+        issuedAt: ticket.issued_at,
+        issuedTimestamp,
+        originalOwnerName: ticket.original_owner_name || 'Unknown',
+        originalOwnerEmailMasked: maskEmail(ticket.original_owner_email),
+        currentOwnerName: ticket.current_owner_name || 'Unknown',
+        currentOwnerEmailMasked: maskEmail(ticket.current_owner_email),
+        transfers: transferRows.map(tr => ({
+          id: tr.id,
+          fromName: tr.from_name || 'Unknown',
+          fromEmailMasked: maskEmail(tr.from_email),
+          toName: tr.to_name || 'Unknown',
+          toEmailMasked: maskEmail(tr.to_email),
+          transferSignatureSnippet: tr.transfer_signature ? `${String(tr.transfer_signature).slice(0, 28)}...` : null,
+          transferredAt: tr.transferred_at
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('[Tickets] Provenance error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
+/**
+ * Chủ vé tự hủy / hoàn trả vé có chữ ký số phần cứng AndroidKeyStore (Hardware-Signed Refund)
+ * POST /api/tickets/:id/refund
+ */
+router.post('/:id/refund', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { clientNonce, nonce, timestamp, deviceSignature, reason } = req.body || {};
+  const { ip, userAgent } = getClientInfo(req);
+  const effectiveNonce = clientNonce || nonce;
+
+  if (!deviceSignature || !effectiveNonce || !timestamp) {
+    return res.status(403).json({
+      success: false,
+      error: 'Hoàn trả vé bắt buộc phải có chữ ký số phần cứng AndroidKeyStore (deviceSignature, clientNonce, timestamp).'
+    });
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const refundTs = Number(timestamp);
+  if (!Number.isFinite(refundTs) || Math.abs(nowSec - refundTs) > 60) {
+    return res.status(403).json({
+      success: false,
+      error: 'Chữ ký hoàn trả vé đã quá hạn 60 giây (Replay blocked).'
+    });
+  }
+
+  if (!consumeClientNonce(`refund:${effectiveNonce}`)) {
+    return res.status(403).json({
+      success: false,
+      error: 'Chặn Replay Attack: Mã clientNonce hoàn trả vé đã được sử dụng!'
+    });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rows] = await conn.execute(
+      'SELECT id, ticket_code, event_id, current_owner_id, status, device_bound_public_key FROM tickets WHERE id = ? FOR UPDATE',
+      [id]
+    );
+    if (rows.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, error: 'Không tìm thấy vé.' });
+    }
+
+    const ticket = rows[0];
+    if (ticket.current_owner_id !== req.user.id) {
+      await conn.rollback();
+      return res.status(403).json({ success: false, error: 'Bạn không phải chủ sở hữu của vé này.' });
+    }
+    if (ticket.status !== 'ACTIVE') {
+      await conn.rollback();
+      return res.status(400).json({ success: false, error: `Không thể hoàn trả vé ở trạng thái '${ticket.status}'.` });
+    }
+
+    const [ownerRows] = await conn.execute(
+      'SELECT device_public_key FROM users WHERE id = ?',
+      [req.user.id]
+    );
+    const ownerPubKey = ticket.device_bound_public_key || ownerRows[0]?.device_public_key;
+    if (ownerPubKey) {
+      const canonicalRefund = `REFUND:${String(id).trim()}:${effectiveNonce}:${timestamp}`;
+      const isSigValid = verifyDeviceSignature(canonicalRefund, deviceSignature, ownerPubKey);
+      if (!isSigValid) {
+        await conn.rollback();
+        return res.status(403).json({
+          success: false,
+          error: 'Chữ ký thiết bị hoàn trả vé không hợp lệ!'
+        });
+      }
+    }
+
+    const deadSeed = generateSecureNonce(32);
+    await conn.execute(
+      "UPDATE tickets SET status = 'REVOKED', qr_secret_seed = ? WHERE id = ?",
+      [deadSeed, id]
+    );
+    await conn.execute(
+      'UPDATE events SET available_tickets = available_tickets + 1 WHERE id = ?',
+      [ticket.event_id]
+    );
+
+    await conn.commit();
+
+    await logSecurityEvent({
+      userId: req.user.id,
+      action: 'TICKET_REFUNDED_BY_OWNER',
+      severity: 'INFO',
+      ipAddress: ip,
+      userAgent,
+      details: { ticketId: id, ticketCode: ticket.ticket_code, reason: reason || 'Chủ vé tự yêu cầu hoàn trả' }
+    });
+
+    res.json({
+      success: true,
+      message: `Đã hoàn trả vé ${ticket.ticket_code} với chữ ký số TEE và trả ghế về kho sự kiện.`,
+      data: { ticketId: id, ticketCode: ticket.ticket_code, status: 'REVOKED' }
+    });
+  } catch (error) {
+    await conn.rollback();
+    console.error('[Tickets] Refund error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  } finally {
+    conn.release();
+  }
+});
 
 /**
  * Thu hồi vé gian lận / phe vé tức thì (RBAC: ORGANIZER, ADMIN)

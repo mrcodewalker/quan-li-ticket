@@ -90,7 +90,9 @@ data class Ticket(
     @SerializedName(value = "qr_secret_seed", alternate = ["qrSecretSeed"]) val qrSecretSeed: String? = null,
     @SerializedName(value = "device_bound_public_key", alternate = ["deviceBoundPublicKey"]) val deviceBoundPublicKey: String? = null,
     @SerializedName(value = "ticket_price", alternate = ["ticketPrice"]) val ticketPrice: Double? = null,
-    @SerializedName(value = "transfer_count", alternate = ["transferCount"]) val transferCount: Int? = 0
+    @SerializedName(value = "transfer_count", alternate = ["transferCount"]) val transferCount: Int? = 0,
+    @SerializedName(value = "seat_zone", alternate = ["seatZone"]) val seatZone: String? = null,
+    @SerializedName(value = "seat_number", alternate = ["seatNumber"]) val seatNumber: String? = null
 )
 
 // --- Anti-scam: xác minh người nhận trước khi chuyển nhượng ---
@@ -169,7 +171,9 @@ data class CreateOrderRequest(
     @SerializedName("passToken") val passToken: String? = null,
     @SerializedName("clientNonce") val clientNonce: String? = null,
     @SerializedName("timestamp") val timestamp: Long? = null,
-    @SerializedName("deviceSignature") val deviceSignature: String? = null
+    @SerializedName("deviceSignature") val deviceSignature: String? = null,
+    @SerializedName("seatZone") val seatZone: String? = null,
+    @SerializedName("seatNumber") val seatNumber: String? = null
 )
 
 data class CreateOrderData(
@@ -178,6 +182,8 @@ data class CreateOrderData(
     @SerializedName("eventId") val eventId: String,
     @SerializedName("eventTitle") val eventTitle: String,
     @SerializedName("amount") val amount: Double,
+    @SerializedName("seatZone") val seatZone: String? = null,
+    @SerializedName("seatNumber") val seatNumber: String? = null,
     @SerializedName("bankId") val bankId: String,
     @SerializedName("bankAccountNo") val bankAccountNo: String,
     @SerializedName("accountName") val accountName: String,
@@ -193,6 +199,8 @@ data class OrderStatusData(
     @SerializedName("orderCode") val orderCode: String,
     @SerializedName("status") val status: String,
     @SerializedName("amount") val amount: Double,
+    @SerializedName("seatZone") val seatZone: String? = null,
+    @SerializedName("seatNumber") val seatNumber: String? = null,
     @SerializedName("eventTitle") val eventTitle: String,
     @SerializedName("transferContent") val transferContent: String,
     @SerializedName("qrImageUrl") val qrImageUrl: String,
@@ -200,6 +208,101 @@ data class OrderStatusData(
     @SerializedName("expiresAt") val expiresAt: String,
     @SerializedName("paidAt") val paidAt: String? = null,
     @SerializedName("ticket") val ticket: Ticket? = null
+)
+
+// --- Booking Context, Order History, Signed Webhook & Ticket Provenance Models ---
+data class ZoneTierInfo(
+    @SerializedName("code") val code: String,
+    @SerializedName("name") val name: String,
+    @SerializedName("multiplier") val multiplier: Double = 1.0,
+    @SerializedName("price") val price: Double,
+    @SerializedName("perks") val perks: String = "",
+    @SerializedName("totalSeats") val totalSeats: Int = 40,
+    @SerializedName("availableSeats") val availableSeats: Int = 40,
+    @SerializedName("seatNumbers") val seatNumbers: List<String> = emptyList()
+)
+
+data class BookingContextData(
+    @SerializedName("event") val event: Event,
+    @SerializedName("maxTicketsPerEvent") val maxTicketsPerEvent: Int = 6,
+    @SerializedName("userActiveTickets") val userActiveTickets: Int = 0,
+    @SerializedName("userPendingOrders") val userPendingOrders: Int = 0,
+    @SerializedName("userTotalActive") val userTotalActive: Int = 0,
+    @SerializedName("zones") val zones: List<ZoneTierInfo> = emptyList(),
+    @SerializedName("soldSeats") val soldSeats: List<String> = emptyList(),
+    @SerializedName("heldSeats") val heldSeats: List<String> = emptyList()
+)
+
+data class OrderHistoryItem(
+    @SerializedName("orderId") val orderId: String,
+    @SerializedName("orderCode") val orderCode: String,
+    @SerializedName("eventId") val eventId: String,
+    @SerializedName("eventTitle") val eventTitle: String,
+    @SerializedName("eventLocation") val eventLocation: String? = null,
+    @SerializedName("eventStartTime") val eventStartTime: String? = null,
+    @SerializedName("amount") val amount: Double,
+    @SerializedName("status") val status: String,
+    @SerializedName("seatZone") val seatZone: String? = null,
+    @SerializedName("seatNumber") val seatNumber: String? = null,
+    @SerializedName("transferContent") val transferContent: String,
+    @SerializedName("qrImageUrl") val qrImageUrl: String? = null,
+    @SerializedName("qrPayload") val qrPayload: String? = null,
+    @SerializedName("expiresAt") val expiresAt: String,
+    @SerializedName("paidAt") val paidAt: String? = null,
+    @SerializedName("createdAt") val createdAt: String? = null,
+    @SerializedName("ttlSeconds") val ttlSeconds: Int = 0,
+    @SerializedName("ticketId") val ticketId: String? = null,
+    @SerializedName("ticketCode") val ticketCode: String? = null,
+    @SerializedName("serverSignatureSnippet") val serverSignatureSnippet: String? = null
+)
+
+data class SignedWebhookSimRequest(
+    @SerializedName("orderId") val orderId: String? = null,
+    @SerializedName("orderCode") val orderCode: String? = null,
+    @SerializedName("attackMode") val attackMode: String = "VALID"
+)
+
+data class SignedWebhookSimData(
+    @SerializedName("ticket") val ticket: Ticket? = null,
+    @SerializedName("hmacDigestSnippet") val hmacDigestSnippet: String? = null,
+    @SerializedName("timestamp") val timestamp: Long? = null,
+    @SerializedName("receivedSignature") val receivedSignature: String? = null,
+    @SerializedName("expectedSignatureSnippet") val expectedSignatureSnippet: String? = null
+)
+
+data class ProvenanceTransferHop(
+    @SerializedName("id") val id: String,
+    @SerializedName("fromName") val fromName: String,
+    @SerializedName("fromEmailMasked") val fromEmailMasked: String,
+    @SerializedName("toName") val toName: String,
+    @SerializedName("toEmailMasked") val toEmailMasked: String,
+    @SerializedName("transferSignatureSnippet") val transferSignatureSnippet: String? = null,
+    @SerializedName("transferredAt") val transferredAt: String? = null
+)
+
+data class TicketProvenanceData(
+    @SerializedName("ticketId") val ticketId: String,
+    @SerializedName("ticketCode") val ticketCode: String,
+    @SerializedName("status") val status: String,
+    @SerializedName("seatZone") val seatZone: String? = null,
+    @SerializedName("seatNumber") val seatNumber: String? = null,
+    @SerializedName("canonicalString") val canonicalString: String,
+    @SerializedName("serverSignature") val serverSignature: String,
+    @SerializedName("deviceBoundPublicKey") val deviceBoundPublicKey: String? = null,
+    @SerializedName("issuedAt") val issuedAt: String? = null,
+    @SerializedName("issuedTimestamp") val issuedTimestamp: Long = 0L,
+    @SerializedName("originalOwnerName") val originalOwnerName: String = "",
+    @SerializedName("originalOwnerEmailMasked") val originalOwnerEmailMasked: String = "",
+    @SerializedName("currentOwnerName") val currentOwnerName: String = "",
+    @SerializedName("currentOwnerEmailMasked") val currentOwnerEmailMasked: String = "",
+    @SerializedName("transfers") val transfers: List<ProvenanceTransferHop> = emptyList()
+)
+
+data class RefundTicketRequest(
+    @SerializedName("clientNonce") val clientNonce: String,
+    @SerializedName("timestamp") val timestamp: Long,
+    @SerializedName("deviceSignature") val deviceSignature: String,
+    @SerializedName("reason") val reason: String = "Chủ vé tự yêu cầu hoàn trả"
 )
 
 data class SimulatePaymentRequest(

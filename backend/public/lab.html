@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SecureTicket PC Security & Red-Team Lab</title>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --card: #111827;
+      --border: #1f2937;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --blue: #3b82f6;
+      --emerald: #10b981;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --cyan: #38bdf8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px;
+    }
+    .container { max-width: 1100px; margin: 0 auto; display: grid; gap: 18px; }
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px solid var(--border); padding-bottom: 14px;
+    }
+    h1 { margin: 0; font-size: 20px; }
+    .subtitle { color: var(--cyan); font-size: 12px; font-weight: 600; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .card h2 { margin: 0; font-size: 14px; color: #f8fafc; }
+    .desc { font-size: 12px; color: var(--muted); margin: 0; }
+    label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px; }
+    input {
+      width: 100%; padding: 8px 10px; border-radius: 8px;
+      border: 1px solid var(--border); background: #0f172a; color: var(--text); font-size: 13px;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      cursor: pointer; border: 0; border-radius: 8px; padding: 9px 12px;
+      font-size: 12px; font-weight: 700; color: white; background: var(--blue);
+    }
+    button.emerald { background: var(--emerald); color: #052e16; }
+    button.danger { background: #7f1d1d; border: 1px solid var(--red); color: #fecaca; }
+    button.secondary { background: #1e293b; border: 1px solid #334155; }
+    pre {
+      margin: 0; background: #050a14; border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px; font-size: 11px; line-height: 1.5;
+      color: var(--cyan); overflow-x: auto; max-height: 280px; white-space: pre-wrap;
+    }
+    .pill {
+      display: inline-block; padding: 3px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 700; background: #1e293b; color: var(--emerald);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>SecureTicket — PC Security &amp; Red-Team Lab</h1>
+        <div class="subtitle">Offloaded from Mobile App · Live Backend Cryptographic &amp; Attack Console</div>
+      </div>
+      <span id="sessionBadge" class="pill">Chưa đăng nhập</span>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h2>1. Phiên Kiểm thử (Auth Session)</h2>
+        <p class="desc">Đăng nhập tài khoản để lấy JWT cho các bài test Red-Team &amp; Webhook.</p>
+        <div>
+          <label>Email</label>
+          <input id="emailInput" value="customer@secureticket.com" />
+        </div>
+        <div>
+          <label>Password</label>
+          <input id="passwordInput" type="password" value="SecureTicket@2026" />
+        </div>
+        <div class="row">
+          <button id="btnLogin">Đăng nhập Lab</button>
+          <button id="btnLoadKey" class="secondary">Xem Server ECDSA Key</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>2. SePay HMAC-SHA256 Webhook Sandbox</h2>
+        <p class="desc">Giả lập ngân hàng gửi Webhook có chữ ký HMAC-SHA256 cho đơn PENDING trên điện thoại.</p>
+        <div>
+          <label>Order Code (6 số trên màn hình VietQR)</label>
+          <input id="orderCodeInput" placeholder="VD: 482910" />
+        </div>
+        <div class="row">
+          <button id="btnMyOrders" class="secondary">Tải đơn PENDING</button>
+          <button id="btnValidWebhook" class="emerald">Gửi Webhook Hợp lệ (200)</button>
+          <button id="btnInvalidWebhook" class="danger">Giả mạo HMAC (401)</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>3. Dual-Token Rotation &amp; Reuse Detector</h2>
+        <p class="desc">Dùng tài khoản phụ để xoay vòng RT1→RT2 rồi phát lại RT1 nhằm kích hoạt khóa phiên 403.</p>
+        <div class="row">
+          <button id="btnRotateToken">Xoay vòng Token Hợp lệ</button>
+          <button id="btnReuseAttack" class="danger">Mô phỏng Đánh cắp &amp; Dùng lại RT1</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>4. Live 5-Attack Red-Team Simulator</h2>
+        <p class="desc">Bắn request tấn công thật tới Backend API và quan sát cơ chế phòng thủ.</p>
+        <div class="row">
+          <button id="btnAtk1" class="danger">1. Bot cURL không TEE (403)</button>
+          <button id="btnAtk2" class="danger">2. Replay Nonce (403)</button>
+          <button id="btnAtk3" class="danger">3. Tampered HMAC (401)</button>
+          <button id="btnAtk4" class="danger">4. Forged QR Gate (400/404)</button>
+          <button id="btnAtk5" class="secondary">5. Anti-Scalping Quota (Max 6)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2>Console Output &amp; SIEM Audit Logs</h2>
+        <div class="row">
+          <button id="btnAuditLogs" class="secondary">Tải SIEM Audit Logs (Organizer)</button>
+          <button id="btnClearLog" class="secondary">Xóa Console</button>
+        </div>
+      </div>
+      <pre id="consoleOut">Ready. Hãy đăng nhập hoặc chạy bất kỳ bài kiểm thử nào...</pre>
+    </div>
+  </div>
+  <script src="/lab.js"></script>
+</body>
+</html>

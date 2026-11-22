@@ -40,11 +40,13 @@ import androidx.compose.ui.unit.sp
 import com.example.quan_ly_ticket.data.api.ApiClient
 import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.CreateOrderData
+import com.example.quan_ly_ticket.data.model.CancelOrderRequest
 import com.example.quan_ly_ticket.data.model.CreateOrderRequest
 import com.example.quan_ly_ticket.data.model.Event
 import com.example.quan_ly_ticket.data.model.JoinQueueRequest
 import com.example.quan_ly_ticket.data.model.LeaveQueueRequest
 import com.example.quan_ly_ticket.data.model.LogoutRequest
+import com.example.quan_ly_ticket.data.model.OrderHistoryItem
 import com.example.quan_ly_ticket.data.model.QueueData
 import com.example.quan_ly_ticket.data.model.RefreshTokenRequest
 import com.example.quan_ly_ticket.data.model.Ticket
@@ -72,6 +74,7 @@ import java.util.UUID
 fun HomeScreen(
     currentTab: NavigationTab = NavigationTab.HOME,
     onSelectTab: (NavigationTab) -> Unit = {},
+    onSelectEvent: (event: Event) -> Unit = {},
     onSelectTicket: (ticket: Ticket) -> Unit,
     onProceedToPayment: (order: CreateOrderData) -> Unit,
     onOpenScanner: () -> Unit,
@@ -93,6 +96,25 @@ fun HomeScreen(
     var waitingQueueEventId by remember { mutableStateOf<String?>(null) }
     var waitingQueueData by remember { mutableStateOf<QueueData?>(null) }
     var hasLoadedInitialTickets by remember { mutableStateOf(false) }
+    var showOrderHistorySheet by remember { mutableStateOf(false) }
+    var orderHistory by remember { mutableStateOf<List<OrderHistoryItem>>(emptyList()) }
+    var isLoadingOrders by remember { mutableStateOf(false) }
+
+    fun loadOrderHistory() {
+        isLoadingOrders = true
+        scope.launch {
+            try {
+                val res = ApiClient.getService(context).getMyOrders()
+                if (res.isSuccessful && res.body()?.success == true) {
+                    orderHistory = res.body()!!.data ?: emptyList()
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            } finally {
+                isLoadingOrders = false
+            }
+        }
+    }
 
     // Settings state
     var biometricEnabled by remember { mutableStateOf(securePrefs.isBiometricEnabled()) }
@@ -258,36 +280,22 @@ fun HomeScreen(
                         onRefresh = { refreshData() },
                         onOpenSettings = { onSelectTab(NavigationTab.SETTINGS) },
                         onOpenTickets = { onSelectTab(NavigationTab.TICKETS) },
+                        onOpenOrders = {
+                            loadOrderHistory()
+                            showOrderHistorySheet = true
+                        },
                         onOpenScanner = onOpenScanner,
-                        onBuyEvent = { eventId ->
-                            scope.launch {
-                                try {
-                                    val api = ApiClient.getService(context)
-                                    val qRes = api.joinQueue(JoinQueueRequest(eventId))
-                                    if (qRes.isSuccessful && qRes.body()?.success == true && qRes.body()?.data != null) {
-                                        val qData = qRes.body()!!.data!!
-                                        if (qData.status == "ACTIVE") {
-                                            proceedCreateOrder(eventId, qData.passToken)
-                                        } else {
-                                            waitingQueueEventId = eventId
-                                            waitingQueueData = qData
-                                        }
-                                    } else {
-                                        // Fallback trực tiếp nếu server chưa bật queue
-                                        proceedCreateOrder(eventId, null)
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                    Toast.makeText(context, "Lỗi kết nối hàng đợi: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
+                        onSelectEvent = onSelectEvent
                     )
 
                     NavigationTab.TICKETS -> TicketsWalletView(
                         tickets = myTickets,
                         isLoading = isLoading,
                         onRefresh = { refreshData() },
+                        onOpenOrders = {
+                            loadOrderHistory()
+                            showOrderHistorySheet = true
+                        },
                         onSelectTicket = { ticket ->
                             onRequireBiometric(
                                 "Mở vé điện tử",
@@ -438,6 +446,142 @@ fun HomeScreen(
             }
         )
     }
+
+    if (showOrderHistorySheet) {
+        @OptIn(ExperimentalMaterial3Api::class)
+        ModalBottomSheet(
+            onDismissRequest = { showOrderHistorySheet = false },
+            containerColor = Color.White,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Đơn hàng & Biên lai Mật mã", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
+                    if (isLoadingOrders) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    }
+                }
+
+                if (orderHistory.isEmpty() && !isLoadingOrders) {
+                    Text("Chưa có đơn hàng nào.", fontSize = 12.sp, color = TextMuted, modifier = Modifier.padding(vertical = 12.dp))
+                } else {
+                    orderHistory.forEach { item ->
+                        val isPending = item.status == "PENDING" && item.ttlSeconds > 0
+                        val isPaid = item.status == "PAID"
+                        GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = item.eventTitle,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextDark,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = when {
+                                            isPaid -> SuccessBg
+                                            isPending -> WarningBg
+                                            else -> Color(0xFFF1F5F9)
+                                        }
+                                    ) {
+                                        Text(
+                                            text = item.status,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = when {
+                                                isPaid -> SuccessFg
+                                                isPending -> WarningFg
+                                                else -> TextMuted
+                                            },
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Đơn #${item.orderCode} · ${item.seatZone ?: "PREM-S"} ${item.seatNumber ?: ""} · ${String.format("%,.0f", item.amount)} ₫",
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                                if (isPaid && !item.serverSignatureSnippet.isNullOrBlank()) {
+                                    Text(
+                                        text = "Vé ${item.ticketCode ?: ""} · ECDSA: ${item.serverSignatureSnippet}",
+                                        fontSize = 10.sp,
+                                        color = SuccessFg,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                if (isPending) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = {
+                                                showOrderHistorySheet = false
+                                                onProceedToPayment(
+                                                    CreateOrderData(
+                                                        orderId = item.orderId,
+                                                        orderCode = item.orderCode,
+                                                        eventId = item.eventId,
+                                                        eventTitle = item.eventTitle,
+                                                        amount = item.amount,
+                                                        seatZone = item.seatZone,
+                                                        seatNumber = item.seatNumber,
+                                                        bankId = "MB",
+                                                        bankAccountNo = "0696961698888",
+                                                        accountName = "MB BANK",
+                                                        transferContent = item.transferContent,
+                                                        qrImageUrl = item.qrImageUrl ?: "",
+                                                        qrPayload = item.qrPayload,
+                                                        expiresAt = item.expiresAt,
+                                                        ttlSeconds = item.ttlSeconds
+                                                    )
+                                                )
+                                            },
+                                            shape = RoundedCornerShape(10.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Tiếp tục thanh toán (${item.ttlSeconds}s)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    try {
+                                                        ApiClient.getService(context).cancelOrder(CancelOrderRequest(item.orderId))
+                                                        loadOrderHistory()
+                                                    } catch (_: Exception) {}
+                                                }
+                                            },
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Text("Hủy", fontSize = 11.sp, color = DangerFg, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
 }
 
 /**
@@ -454,13 +598,16 @@ private fun HomeMainView(
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTickets: () -> Unit,
+    onOpenOrders: () -> Unit,
     onOpenScanner: () -> Unit,
-    onBuyEvent: (String) -> Unit
+    onSelectEvent: (Event) -> Unit
 ) {
     val isStaffOrOrganizer = userRole.uppercase() in listOf("STAFF", "ORGANIZER", "ADMIN")
     var selectedCategory by remember { mutableStateOf("Tất cả") }
-    val filteredEvents = remember(events, selectedCategory) {
-        if (selectedCategory == "Tất cả") events
+    var searchKeyword by remember { mutableStateOf("") }
+    var sortMode by remember { mutableStateOf("Sắp diễn ra") }
+    val filteredEvents = remember(events, selectedCategory, searchKeyword, sortMode) {
+        val byCat = if (selectedCategory == "Tất cả") events
         else events.filter { ev ->
             val desc = (ev.description ?: "") + " " + ev.title
             when (selectedCategory) {
@@ -469,6 +616,15 @@ private fun HomeMainView(
                 "Esports & Tech" -> desc.contains("ESPORTS", true) || desc.contains("CÔNG NGHỆ", true) || desc.contains("Google", true)
                 else -> true
             }
+        }
+        val bySearch = if (searchKeyword.isBlank()) byCat else byCat.filter { ev ->
+            ev.title.contains(searchKeyword, ignoreCase = true) ||
+                ev.location.contains(searchKeyword, ignoreCase = true)
+        }
+        when (sortMode) {
+            "Giá thấp → cao" -> bySearch.sortedBy { it.ticketPrice }
+            "Còn nhiều vé" -> bySearch.sortedByDescending { it.availableTickets }
+            else -> bySearch.sortedBy { it.startTime }
         }
     }
 
@@ -585,18 +741,35 @@ private fun HomeMainView(
                         }
                     }
                 } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(42.dp)
-                            .clip(RoundedCornerShape(11.dp))
-                            .background(PrimaryBlue)
-                            .clickable { onOpenTickets() },
-                        contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Default.ConfirmationNumber, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Text("Mở ví vé", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(PrimaryBlue)
+                                .clickable { onOpenTickets() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.ConfirmationNumber, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Text("Mở ví vé", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(InfoBg)
+                                .border(1.dp, InfoBorder, RoundedCornerShape(11.dp))
+                                .clickable { onOpenOrders() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("Đơn hàng & Biên lai", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = PrimaryBlue)
                         }
                     }
                 }
@@ -657,7 +830,7 @@ private fun HomeMainView(
                         GlassCard(
                             modifier = Modifier
                                 .width(252.dp)
-                                .clickable { onBuyEvent(ev.id) },
+                                .clickable { onSelectEvent(ev) },
                             shape = RoundedCornerShape(16.dp)
                         ) {
                             // Top Real Concert/Event Photo
@@ -744,7 +917,7 @@ private fun HomeMainView(
             }
         }
 
-        // 4. Category Filter Strip + Full Event Feed
+        // 4. Category Filter Strip + Search + Sort + Full Event Feed
         Column(
             modifier = Modifier.padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -756,6 +929,39 @@ private fun HomeMainView(
                 color = TextDark,
                 letterSpacing = (-0.3).sp
             )
+
+            OutlinedTextField(
+                value = searchKeyword,
+                onValueChange = { searchKeyword = it },
+                placeholder = { Text("Tìm sự kiện, địa điểm...", fontSize = 12.sp) },
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = TextMuted, modifier = Modifier.size(18.dp)) },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf("Sắp diễn ra", "Giá thấp → cao", "Còn nhiều vé").forEach { mode ->
+                    val active = sortMode == mode
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (active) InfoBg else Color.White,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (active) PrimaryBlue else BorderLight),
+                        onClick = { sortMode = mode }
+                    ) {
+                        Text(
+                            text = mode,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (active) PrimaryBlue else TextMuted,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -791,7 +997,7 @@ private fun HomeMainView(
                     GlassCard(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onBuyEvent(event.id) },
+                            .clickable { onSelectEvent(event) },
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         Row(
@@ -841,7 +1047,7 @@ private fun HomeMainView(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(PrimaryBlue)
-                                    .clickable { onBuyEvent(event.id) }
+                                    .clickable { onSelectEvent(event) }
                                     .padding(horizontal = 11.dp, vertical = 8.dp),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -872,6 +1078,7 @@ private fun TicketsWalletView(
     tickets: List<Ticket>,
     isLoading: Boolean,
     onRefresh: () -> Unit,
+    onOpenOrders: () -> Unit,
     onSelectTicket: (Ticket) -> Unit
 ) {
     var selectedSegment by remember { mutableStateOf("upcoming") }
@@ -927,21 +1134,37 @@ private fun TicketsWalletView(
                 )
             }
 
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (isSearchActive) PrimaryNavy else Color.White)
-                    .border(1.dp, if (isSearchActive) PrimaryNavy else BorderLight, RoundedCornerShape(12.dp))
-                    .clickable { isSearchActive = !isSearchActive },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "Tìm kiếm vé",
-                    tint = if (isSearchActive) Color.White else TextDark,
-                    modifier = Modifier.size(19.dp)
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = InfoBg,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, InfoBorder),
+                    onClick = onOpenOrders
+                ) {
+                    Text(
+                        text = "Đơn hàng",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PrimaryBlue,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isSearchActive) PrimaryNavy else Color.White)
+                        .border(1.dp, if (isSearchActive) PrimaryNavy else BorderLight, RoundedCornerShape(12.dp))
+                        .clickable { isSearchActive = !isSearchActive },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Tìm kiếm vé",
+                        tint = if (isSearchActive) Color.White else TextDark,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
             }
         }
 
@@ -1149,16 +1372,6 @@ private fun SettingsView(
     logoutConfirmPending: Boolean,
     onLogoutClick: () -> Unit
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var accessSnippet by remember {
-        mutableStateOf(securePrefs.getAccessToken()?.let { "${it.take(16)}...${it.takeLast(8)}" } ?: "Chưa cấp")
-    }
-    var refreshSnippet by remember {
-        mutableStateOf(securePrefs.getRefreshToken()?.let { "${it.take(16)}...${it.takeLast(8)}" } ?: "Chưa cấp")
-    }
-    var rotationCount by remember { mutableIntStateOf(securePrefs.getRefreshRotationCount()) }
-    var isRotating by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxSize()

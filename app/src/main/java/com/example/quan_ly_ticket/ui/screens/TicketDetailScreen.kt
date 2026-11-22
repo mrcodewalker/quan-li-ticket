@@ -36,8 +36,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.quan_ly_ticket.data.api.ApiClient
+import com.example.quan_ly_ticket.data.local.EncryptedTicketVault
 import com.example.quan_ly_ticket.data.local.SecurePreferences
+import com.example.quan_ly_ticket.data.model.RefundTicketRequest
 import com.example.quan_ly_ticket.data.model.Ticket
+import com.example.quan_ly_ticket.data.model.TicketProvenanceData
 import com.example.quan_ly_ticket.data.model.TransferTicketRequest
 import com.example.quan_ly_ticket.data.model.RecipientVerifyData
 import com.example.quan_ly_ticket.data.model.VerifyRecipientRequest
@@ -68,6 +71,7 @@ fun TicketDetailScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val securePrefs = remember { SecurePreferences(context) }
+    val ticketVault = remember { EncryptedTicketVault(context) }
 
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var remainingSeconds by remember { mutableIntStateOf(30) }
@@ -76,7 +80,46 @@ fun TicketDetailScreen(
     var showTransferModal by remember { mutableStateOf(false) }
     var isQrShielded by remember { mutableStateOf(false) }
     var shieldReason by remember { mutableStateOf("Đã khóa hiển thị QR để chống chụp lén / pass vé") }
+    var provenance by remember { mutableStateOf<TicketProvenanceData?>(null) }
+    var showProvenanceDetails by remember { mutableStateOf(false) }
+    var offlineVerified by remember { mutableStateOf<Boolean?>(null) }
+    var offlineVerifyMs by remember { mutableLongStateOf(0L) }
+    var showRefundConfirm by remember { mutableStateOf(false) }
+    var isRefunding by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Tải chuỗi nguồn gốc (Provenance) & xác minh chữ ký ECDSA P-256 offline ngay trên thiết bị
+    LaunchedEffect(ticket.id) {
+        val pubKey = securePrefs.getServerPublicKey() ?: CryptoHelper.DEFAULT_SERVER_PUBLIC_KEY_BASE64
+        if (ticket.issuedTimestamp != null && !ticket.currentOwnerId.isNullOrBlank() && ticket.serverSignature.isNotBlank()) {
+            val (ok, elapsed) = withContext(Dispatchers.Default) {
+                val t0 = System.nanoTime()
+                val canonical = CryptoHelper.buildTicketCanonicalString(ticket, ticket.currentOwnerId)
+                val valid = CryptoHelper.verifyServerSignature(canonical, ticket.serverSignature, pubKey)
+                val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+                valid to ms
+            }
+            offlineVerified = ok
+            offlineVerifyMs = elapsed
+        }
+        try {
+            val provRes = ApiClient.getService(context).getTicketProvenance(ticket.id)
+            if (provRes.isSuccessful && provRes.body()?.success == true && provRes.body()?.data != null) {
+                val prov = provRes.body()!!.data!!
+                provenance = prov
+                val (ok, elapsed) = withContext(Dispatchers.Default) {
+                    val t0 = System.nanoTime()
+                    val valid = CryptoHelper.verifyServerSignature(prov.canonicalString, prov.serverSignature, pubKey)
+                    val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+                    valid to ms
+                }
+                offlineVerified = ok
+                offlineVerifyMs = elapsed
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+        }
+    }
 
     // Chống Pass Vé 1: Phát hiện trình chiếu màn hình phụ / quay màn hình (DisplayManager) & Tự khóa QR khi rời ứng dụng (ON_PAUSE)
     DisposableEffect(lifecycleOwner) {
@@ -502,9 +545,203 @@ fun TicketDetailScreen(
                     }
                 }
 
+                // ================= OFFLINE ECDSA P-256 CERTIFICATE BADGE =================
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    backgroundColor = if (offlineVerified == true) SuccessBg else Color.White,
+                    borderColor = if (offlineVerified == true) SuccessBorder else BorderLight
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VerifiedUser,
+                            contentDescription = null,
+                            tint = if (offlineVerified == true) SuccessFg else PrimaryBlue,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = when (offlineVerified) {
+                                    true -> "Chứng thư số ECDSA P-256 (Verified Offline)"
+                                    false -> "Cảnh báo: Chữ ký ECDSA không khớp!"
+                                    null -> "Chứng thư số ECDSA P-256 (Đang kiểm tra...)"
+                                },
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (offlineVerified == true) SuccessFg else TextDark
+                            )
+                            val zoneLabel = provenance?.seatZone ?: ticket.seatZone
+                            val seatLabel = provenance?.seatNumber ?: ticket.seatNumber
+                            Text(
+                                text = buildString {
+                                    if (offlineVerified != null) append("Xác minh cục bộ ${offlineVerifyMs}ms")
+                                    if (!zoneLabel.isNullOrBlank()) append(" · Khu $zoneLabel ${seatLabel ?: ""}")
+                                }.ifBlank { "secp256r1 · SHA-256" },
+                                fontSize = 10.sp,
+                                color = TextMuted
+                            )
+                        }
+                    }
+                }
+
+                // ================= OWNERSHIP PROVENANCE CHAIN =================
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    onClick = { showProvenanceDetails = !showProvenanceDetails }
+                ) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Chuỗi Sở hữu & Lịch sử Chuyển nhượng",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = TextDark
+                            )
+                            Icon(
+                                imageVector = if (showProvenanceDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                tint = TextMuted
+                            )
+                        }
+                        val prov = provenance
+                        Text(
+                            text = if (prov != null) {
+                                "Chủ gốc: ${prov.originalOwnerName} (${prov.originalOwnerEmailMasked}) · ${prov.transfers.size} lần chuyển"
+                            } else {
+                                "Đang tải chuỗi nguồn gốc vé từ máy chủ..."
+                            },
+                            fontSize = 10.sp,
+                            color = TextMuted
+                        )
+                        AnimatedVisibility(visible = showProvenanceDetails && prov != null) {
+                            prov?.let { p ->
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    HorizontalDivider(color = BorderLight)
+                                    Text(
+                                        text = "• Khởi tạo gốc: ${p.originalOwnerName} (${p.originalOwnerEmailMasked})",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = TextDark
+                                    )
+                                    p.transfers.forEachIndexed { idx, hop ->
+                                        Text(
+                                            text = "• Chuyển #${idx + 1}: ${hop.fromName} → ${hop.toName} (${hop.toEmailMasked})",
+                                            fontSize = 11.sp,
+                                            color = PrimaryBlue,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                    CryptoTerminalBox(
+                                        title = "ECDSA P-256 CANONICAL PROOF",
+                                        badgeText = if (offlineVerified == true) "VERIFIED" else "SIGNED",
+                                        lines = listOf(
+                                            "canonical" to p.canonicalString,
+                                            "sig" to "${p.serverSignature.take(40)}..."
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ================= HARDWARE-SIGNED TICKET REFUND =================
+                if (ticket.status == "ACTIVE" || ticket.status == null) {
+                    OutlinedButton(
+                        onClick = { showRefundConfirm = true },
+                        enabled = !isRefunding,
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DangerBorder),
+                        modifier = Modifier.fillMaxWidth().height(46.dp)
+                    ) {
+                        if (isRefunding) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = DangerFg)
+                        } else {
+                            Text(
+                                text = "Hoàn trả vé & Hủy giữ chỗ",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = DangerFg
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+    }
+
+    if (showRefundConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRefundConfirm = false },
+            containerColor = Color.White,
+            title = { Text("Xác nhận hoàn trả vé?", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp) },
+            text = {
+                Text(
+                    "Thao tác này sẽ thu hồi vĩnh viễn mã QR/NFC của vé ${ticket.ticketCode} và trả ghế về kho sự kiện.",
+                    fontSize = 12.sp,
+                    color = TextMuted
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRefundConfirm = false
+                        onRequireBiometric(
+                            "Xác nhận hoàn trả vé",
+                            "Xác thực sinh trắc học để hoàn trả vé"
+                        ) {
+                            isRefunding = true
+                            scope.launch {
+                                try {
+                                    val nonce = UUID.randomUUID().toString().replace("-", "")
+                                    val ts = System.currentTimeMillis() / 1000L
+                                    val sig = withContext(Dispatchers.Default) {
+                                        KeystoreManager.signRefundPayload(ticket.id, nonce, ts)
+                                    }
+                                    val res = ApiClient.getService(context).refundTicket(
+                                        ticket.id,
+                                        RefundTicketRequest(clientNonce = nonce, timestamp = ts, deviceSignature = sig)
+                                    )
+                                    if (res.isSuccessful && res.body()?.success == true) {
+                                        SecureTicketHceService.activeTicketId = null
+                                        withContext(Dispatchers.IO) {
+                                            val updated = ticketVault.loadTicketsDecrypted().filterNot { it.id == ticket.id }
+                                            ticketVault.saveTicketsEncrypted(updated)
+                                        }
+                                        Toast.makeText(context, "Đã hoàn trả vé thành công!", Toast.LENGTH_SHORT).show()
+                                        onBack()
+                                    } else {
+                                        Toast.makeText(context, res.body()?.error ?: "Hoàn trả thất bại", Toast.LENGTH_SHORT).show()
+                                    }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    isRefunding = false
+                                }
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DangerFg)
+                ) {
+                    Text("Xác nhận hoàn trả", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRefundConfirm = false }) { Text("Đóng") }
+            }
+        )
     }
 
     // ================= TRANSFER MODAL: 3 BƯỚC XÁC THỰC (Verify recipient -> Confirm -> Biometric + TEE signature) =================

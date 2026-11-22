@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.RefreshTokenRequest
+import com.example.quan_ly_ticket.security.SecurityDebugLog
 import okhttp3.Authenticator
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -80,14 +81,16 @@ class TokenAuthenticator(
                     refreshToken = newTokens.refreshToken,
                     expiresInSeconds = newTokens.expiresIn
                 )
-                securePrefs.incrementRefreshRotationCount()
+                val count = securePrefs.incrementRefreshRotationCount()
                 Log.i(TAG, "Dual-Token Refresh Rotation succeeded automatically.")
+                SecurityDebugLog.d("Dual-Token", "Auto-rotated refresh token on 401 (rotationCount=$count, path=$path)")
 
                 response.request.newBuilder()
                     .header("Authorization", "Bearer ${newTokens.accessToken}")
                     .build()
             } else {
                 Log.w(TAG, "Refresh token expired or revoked (${refreshResponse.code()}). Clearing session.")
+                SecurityDebugLog.w("Dual-Token", "Refresh rejected (${refreshResponse.code()}); session cleared")
                 securePrefs.clear()
                 null
             }

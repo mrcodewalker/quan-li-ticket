@@ -13,6 +13,12 @@ import {
 import { verifyCheckoutPass, cleanAndPromoteQueue } from '../services/queueService.js';
 import { logSecurityEvent } from '../services/auditService.js';
 import { generateVietQrEmvco } from '../services/vietqrService.js';
+import {
+  MAX_ACTIVE_TICKETS_PER_EVENT,
+  SEAT_NUMBERS,
+  getZoneTier,
+  computeTierPrice
+} from '../config/ticketTiers.js';
 
 const router = express.Router();
 
@@ -22,15 +28,32 @@ const BANK_ACCOUNT_NO = process.env.BANK_ACCOUNT_NO || '0696961698888';
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || 'MB BANK';
 const VIETQR_TEMPLATE = process.env.VIETQR_TEMPLATE || 'compact2';
 
-const SEAT_ZONES = ['VIP-A', 'VIP-B', 'FANZONE', 'PLATINUM', 'PREM-S', 'STAGE-V'];
+/**
+ * Idempotent migration: bổ sung cột seat_zone và seat_number vào bảng orders nếu chưa có
+ */
+export async function ensureOrderColumns() {
+  const columns = [
+    'ALTER TABLE orders ADD COLUMN seat_zone VARCHAR(32) NULL',
+    'ALTER TABLE orders ADD COLUMN seat_number VARCHAR(16) NULL'
+  ];
+  for (const ddl of columns) {
+    try {
+      await pool.execute(ddl);
+    } catch (err) {
+      if (err.code !== 'ER_DUP_FIELDNAME' && err.errno !== 1060) {
+        console.warn('[Payment] Order column migration warning:', err.message);
+      }
+    }
+  }
+}
 
 /**
  * Hàm hỗ trợ xuất vé an toàn sau khi thanh toán thành công
  */
 async function issueTicketOnPayment(conn, order, user) {
   const ticketId = uuidv4();
-  const zone = SEAT_ZONES[Math.floor(Math.random() * SEAT_ZONES.length)];
-  const seatNum = String(Math.floor(10 + Math.random() * 89));
+  const zone = (order.seat_zone || 'PREM-S').toUpperCase();
+  const seatNum = order.seat_number || '10';
   const suffix = crypto.randomBytes(2).toString('hex').toUpperCase();
   const ticketCode = `${zone}${seatNum}-${suffix}`;
   const nonce = generateSecureNonce(16);
@@ -95,28 +118,53 @@ async function issueTicketOnPayment(conn, order, user) {
  * POST /api/payment/create-vietqr
  */
 router.post('/create-vietqr', authenticateToken, async (req, res) => {
-  const { eventId, passToken, clientNonce, timestamp, deviceSignature } = req.body;
+  const { eventId, passToken, clientNonce, timestamp, deviceSignature, seatZone, seatNumber } = req.body;
   const { ip, userAgent } = getClientInfo(req);
 
   if (!eventId) {
     return res.status(400).json({ success: false, error: 'eventId is required.' });
   }
 
-  // Kiểm tra Anti-Replay Nonce & Timestamp nếu client gửi chữ ký thiết bị
-  if (clientNonce && timestamp) {
-    const nowSec = Math.floor(Date.now() / 1000);
-    if (Math.abs(nowSec - Number(timestamp)) > 90) {
-      return res.status(403).json({
-        success: false,
-        error: 'Chữ ký tạo đơn hàng đã quá hạn thời gian (> 90s). Vui lòng kiểm tra đồng hồ thiết bị.'
-      });
-    }
-    if (!consumeClientNonce(`vietqr:${clientNonce}`)) {
-      return res.status(403).json({
-        success: false,
-        error: 'Chặn Replay Attack: Mã clientNonce tạo đơn hàng đã được sử dụng!'
-      });
-    }
+  // Bắt buộc có chữ ký phần cứng TEE & Nonce/Timestamp chống Bot cURL
+  if (!deviceSignature || !clientNonce || !timestamp) {
+    await logSecurityEvent({
+      userId: req.user.id,
+      action: 'BOT_BUY_ATTEMPT_BLOCKED',
+      severity: 'HIGH',
+      ipAddress: ip,
+      userAgent,
+      details: { eventId, endpoint: '/api/payment/create-vietqr', reason: 'Missing deviceSignature, clientNonce or timestamp' }
+    });
+    return res.status(403).json({
+      success: false,
+      errorCode: 'BOT_BUY_ATTEMPT_BLOCKED',
+      error: 'Chặn Bot tự động: Tạo đơn đặt ghế bắt buộc phải có chữ ký số phần cứng AndroidKeyStore (deviceSignature, clientNonce, timestamp).'
+    });
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(nowSec - ts) > 90) {
+    return res.status(403).json({
+      success: false,
+      error: 'Chữ ký tạo đơn hàng đã quá hạn thời gian (> 90s). Vui lòng kiểm tra đồng hồ thiết bị.'
+    });
+  }
+
+  if (!consumeClientNonce(`vietqr:${clientNonce}`)) {
+    await logSecurityEvent({
+      userId: req.user.id,
+      action: 'BUY_REPLAY_NONCE_BLOCKED',
+      severity: 'CRITICAL',
+      ipAddress: ip,
+      userAgent,
+      details: { eventId, clientNonce }
+    });
+    return res.status(403).json({
+      success: false,
+      errorCode: 'BUY_REPLAY_NONCE_BLOCKED',
+      error: 'Chặn Replay Attack: Mã clientNonce tạo đơn hàng đã được sử dụng!'
+    });
   }
 
   // Xác thực quyền vào mua từ hàng đợi ảo (nếu có passToken)
@@ -131,6 +179,8 @@ router.post('/create-vietqr', authenticateToken, async (req, res) => {
     }
     queueId = verifiedPass.queueId;
   }
+
+  const tier = getZoneTier(seatZone);
 
   const conn = await pool.getConnection();
   try {
@@ -153,9 +203,126 @@ router.post('/create-vietqr', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Sự kiện không còn mở bán vé.' });
     }
 
+    // Dọn dẹp các đơn PENDING đã quá hạn để hoàn trả available_tickets về kho trước khi kiểm tra
+    const [expiredRes] = await conn.execute(
+      `UPDATE orders SET status = 'EXPIRED' WHERE event_id = ? AND status = 'PENDING' AND expires_at <= NOW()`,
+      [eventId]
+    );
+    if (expiredRes.affectedRows > 0) {
+      await conn.execute(
+        'UPDATE events SET available_tickets = available_tickets + ? WHERE id = ?',
+        [expiredRes.affectedRows, eventId]
+      );
+      event.available_tickets = Number(event.available_tickets) + expiredRes.affectedRows;
+    }
+
     if (event.available_tickets <= 0) {
       await conn.rollback();
       return res.status(400).json({ success: false, error: 'Vé đã được bán hết.' });
+    }
+
+    // Xác minh chữ ký phần cứng ECDSA P-256 trên chuỗi BUY:<eventId>:<clientNonce>:<timestamp>
+    const [userRows] = await conn.execute(
+      'SELECT id, email, device_public_key FROM users WHERE id = ?',
+      [req.user.id]
+    );
+    const user = userRows[0];
+    if (user && user.device_public_key) {
+      const buyCanonical = `BUY:${String(eventId).trim()}:${clientNonce}:${timestamp}`;
+      const isDeviceSigValid = verifyDeviceSignature(buyCanonical, deviceSignature, user.device_public_key);
+      if (!isDeviceSigValid) {
+        await conn.rollback();
+        await logSecurityEvent({
+          userId: req.user.id,
+          action: 'BUY_INVALID_DEVICE_SIGNATURE',
+          severity: 'CRITICAL',
+          ipAddress: ip,
+          userAgent,
+          details: { eventId, endpoint: '/api/payment/create-vietqr' }
+        });
+        return res.status(403).json({
+          success: false,
+          errorCode: 'BUY_INVALID_DEVICE_SIGNATURE',
+          error: 'Chữ ký số phần cứng (AndroidKeyStore ECDSA) không khớp với thiết bị đã đăng ký!'
+        });
+      }
+    }
+
+    // Chống đầu cơ (Anti-Scalping): Tối đa 6 vé/đơn giữ chỗ cho mỗi user trên 1 sự kiện
+    const [activeTicketCnt] = await conn.execute(
+      `SELECT COUNT(*) as cnt FROM tickets WHERE current_owner_id = ? AND event_id = ? AND status = 'ACTIVE'`,
+      [req.user.id, eventId]
+    );
+    const [pendingOrderCnt] = await conn.execute(
+      `SELECT COUNT(*) as cnt FROM orders WHERE user_id = ? AND event_id = ? AND status = 'PENDING' AND expires_at > NOW()`,
+      [req.user.id, eventId]
+    );
+    const userEventTotal = Number(activeTicketCnt[0]?.cnt || 0) + Number(pendingOrderCnt[0]?.cnt || 0);
+    if (userEventTotal >= MAX_ACTIVE_TICKETS_PER_EVENT) {
+      await conn.rollback();
+      await logSecurityEvent({
+        userId: req.user.id,
+        action: 'ANTI_SCALPING_QUOTA_BLOCKED',
+        severity: 'WARNING',
+        ipAddress: ip,
+        userAgent,
+        details: { eventId, userEventTotal, maxAllowed: MAX_ACTIVE_TICKETS_PER_EVENT }
+      });
+      return res.status(403).json({
+        success: false,
+        errorCode: 'ANTI_SCALPING_QUOTA_EXCEEDED',
+        error: `Chính sách Chống Đầu Cơ (Anti-Scalping): Mỗi tài khoản chỉ được sở hữu/giữ tối đa ${MAX_ACTIVE_TICKETS_PER_EVENT} vé cho sự kiện này.`
+      });
+    }
+
+    // Xác định & khóa ghế (seatZone + seatNumber)
+    let chosenSeat = seatNumber ? String(seatNumber).trim() : null;
+    if (chosenSeat && !SEAT_NUMBERS.includes(chosenSeat)) {
+      await conn.rollback();
+      return res.status(400).json({ success: false, error: `Số ghế '${chosenSeat}' không hợp lệ (10–49).` });
+    }
+
+    if (chosenSeat) {
+      const [soldMatch] = await conn.execute(
+        `SELECT id FROM tickets WHERE event_id = ? AND status IN ('ACTIVE', 'USED') AND ticket_code LIKE ? LIMIT 1`,
+        [eventId, `${tier.code}${chosenSeat}-%`]
+      );
+      const [heldMatch] = await conn.execute(
+        `SELECT id FROM orders WHERE event_id = ? AND status = 'PENDING' AND expires_at > NOW() AND seat_zone = ? AND seat_number = ? LIMIT 1`,
+        [eventId, tier.code, chosenSeat]
+      );
+      if (soldMatch.length > 0 || heldMatch.length > 0) {
+        await conn.rollback();
+        return res.status(409).json({
+          success: false,
+          errorCode: 'SEAT_ALREADY_TAKEN',
+          error: `Ghế ${tier.code} · ${chosenSeat} vừa được người khác giữ hoặc đã bán. Vui lòng chọn ghế khác.`
+        });
+      }
+    } else {
+      // Tự động tìm ghế trống đầu tiên trong zone nếu client không truyền seatNumber
+      const [soldRows] = await conn.execute(
+        `SELECT ticket_code FROM tickets WHERE event_id = ? AND status IN ('ACTIVE', 'USED') AND ticket_code LIKE ?`,
+        [eventId, `${tier.code}%`]
+      );
+      const [heldRows] = await conn.execute(
+        `SELECT seat_number FROM orders WHERE event_id = ? AND status = 'PENDING' AND expires_at > NOW() AND seat_zone = ?`,
+        [eventId, tier.code]
+      );
+      const takenSet = new Set(heldRows.map(r => String(r.seat_number)));
+      for (const r of soldRows) {
+        const m = String(r.ticket_code).slice(tier.code.length).match(/^(\d{2})-/);
+        if (m) takenSet.add(m[1]);
+      }
+      chosenSeat = SEAT_NUMBERS.find(s => !takenSet.has(s));
+      if (!chosenSeat) {
+        await conn.rollback();
+        return res.status(409).json({
+          success: false,
+          errorCode: 'SEAT_ALREADY_TAKEN',
+          error: `Hạng vé ${tier.code} đã hết ghế trống.`
+        });
+      }
     }
 
     // Tạm giữ 1 vé
@@ -168,7 +335,7 @@ router.post('/create-vietqr', authenticateToken, async (req, res) => {
     // Sinh order_code ngẫu nhiên 6 chữ số
     const orderCode = String(Math.floor(100000 + Math.random() * 900000));
     const transferContent = `SECURE ${orderCode}`;
-    const amount = Number(event.ticket_price);
+    const amount = computeTierPrice(event.ticket_price, tier.multiplier);
 
     // Thời hạn thanh toán: 5 phút
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
@@ -182,15 +349,14 @@ router.post('/create-vietqr', authenticateToken, async (req, res) => {
     });
 
     // Sinh link VietQR chuẩn Napas 247
-    // Format: https://img.vietqr.io/image/<BANK_ID>-<ACCOUNT_NO>-<TEMPLATE>.png?amount=<AMOUNT>&addInfo=<CONTENT>&accountName=<NAME>
     const qrImageUrl = `https://img.vietqr.io/image/${BANK_ID}-${BANK_ACCOUNT_NO}-${VIETQR_TEMPLATE}.png?amount=${amount}&addInfo=${encodeURIComponent(transferContent)}&accountName=${encodeURIComponent(BANK_ACCOUNT_NAME)}`;
 
     await conn.execute(
       `INSERT INTO orders (
         id, order_code, event_id, user_id, amount, status, payment_method,
-        qr_image_url, transfer_content, expires_at
-      ) VALUES (?, ?, ?, ?, ?, 'PENDING', 'VIETQR', ?, ?, ?)`,
-      [orderId, orderCode, eventId, req.user.id, amount, qrImageUrl, transferContent, expiresAt]
+        qr_image_url, transfer_content, expires_at, seat_zone, seat_number
+      ) VALUES (?, ?, ?, ?, ?, 'PENDING', 'VIETQR', ?, ?, ?, ?, ?)`,
+      [orderId, orderCode, eventId, req.user.id, amount, qrImageUrl, transferContent, expiresAt, tier.code, chosenSeat]
     );
 
     await conn.commit();
@@ -201,7 +367,7 @@ router.post('/create-vietqr', authenticateToken, async (req, res) => {
       severity: 'INFO',
       ipAddress: ip,
       userAgent,
-      details: { orderId, orderCode, eventId, amount }
+      details: { orderId, orderCode, eventId, amount, seatZone: tier.code, seatNumber: chosenSeat, queueId }
     });
 
     res.status(201).json({
@@ -213,6 +379,8 @@ router.post('/create-vietqr', authenticateToken, async (req, res) => {
         eventId,
         eventTitle: event.title,
         amount,
+        seatZone: tier.code,
+        seatNumber: chosenSeat,
         bankId: BANK_ID,
         bankAccountNo: BANK_ACCOUNT_NO,
         accountName: BANK_ACCOUNT_NAME,
@@ -300,6 +468,8 @@ router.get('/order/:orderId', authenticateToken, async (req, res) => {
         orderCode: order.order_code,
         status: order.status,
         amount: order.amount,
+        seatZone: order.seat_zone || null,
+        seatNumber: order.seat_number || null,
         eventTitle: order.event_title,
         transferContent: order.transfer_content,
         qrImageUrl: order.qr_image_url,
@@ -317,6 +487,207 @@ router.get('/order/:orderId', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('[Payment] Get order status error:', error);
     res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
+/**
+ * 2b. Lịch sử đơn hàng & biên lai mật mã của người dùng
+ * GET /api/payment/my-orders
+ */
+router.get('/my-orders', authenticateToken, async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT o.id, o.order_code, o.event_id, o.ticket_id, o.amount, o.status,
+              o.seat_zone, o.seat_number, o.qr_image_url, o.transfer_content,
+              o.expires_at, o.paid_at, o.created_at,
+              e.title as event_title, e.location as event_location, e.start_time as event_start_time,
+              t.ticket_code, t.server_signature
+       FROM orders o
+       JOIN events e ON o.event_id = e.id
+       LEFT JOIN tickets t ON o.ticket_id = t.id
+       WHERE o.user_id = ?
+       ORDER BY o.created_at DESC
+       LIMIT 30`,
+      [req.user.id]
+    );
+
+    const nowMs = Date.now();
+    const orders = rows.map(o => {
+      const expiresMs = new Date(o.expires_at).getTime();
+      const isExpired = o.status === 'PENDING' && expiresMs <= nowMs;
+      const effectiveStatus = isExpired ? 'EXPIRED' : o.status;
+      const ttlSeconds = effectiveStatus === 'PENDING'
+        ? Math.max(0, Math.floor((expiresMs - nowMs) / 1000))
+        : 0;
+
+      return {
+        orderId: o.id,
+        orderCode: o.order_code,
+        eventId: o.event_id,
+        eventTitle: o.event_title,
+        eventLocation: o.event_location,
+        eventStartTime: o.event_start_time,
+        amount: Number(o.amount),
+        status: effectiveStatus,
+        seatZone: o.seat_zone || null,
+        seatNumber: o.seat_number || null,
+        transferContent: o.transfer_content,
+        qrImageUrl: o.qr_image_url,
+        qrPayload: effectiveStatus === 'PENDING' ? generateVietQrEmvco({
+          bankBin: BANK_BIN,
+          accountNo: BANK_ACCOUNT_NO,
+          amount: o.amount,
+          memo: o.transfer_content
+        }) : null,
+        expiresAt: o.expires_at,
+        paidAt: o.paid_at,
+        createdAt: o.created_at,
+        ttlSeconds,
+        ticketId: o.ticket_id || null,
+        ticketCode: o.ticket_code || null,
+        serverSignatureSnippet: o.server_signature ? `${String(o.server_signature).slice(0, 28)}...` : null
+      };
+    });
+
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.error('[Payment] My orders error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
+/**
+ * 2c. Sandbox Inspector: Giả lập SePay Webhook có ký số HMAC-SHA256 thật (hoặc giả mạo HMAC để Red-Team)
+ * POST /api/payment/simulate-signed-webhook
+ */
+router.post('/simulate-signed-webhook', authenticateToken, async (req, res) => {
+  const { orderId, orderCode, attackMode } = req.body || {};
+  const { ip, userAgent } = getClientInfo(req);
+  const webhookSecret = process.env.SEPAY_WEBHOOK_SECRET || process.env.PAYMENT_WEBHOOK_SECRET || 'SecureTicket_Payment_Webhook_HMAC_Secret_2026';
+
+  if (!orderId && !orderCode) {
+    return res.status(400).json({ success: false, error: 'orderId or orderCode is required.' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const query = orderId
+      ? 'SELECT * FROM orders WHERE id = ? FOR UPDATE'
+      : 'SELECT * FROM orders WHERE order_code = ? FOR UPDATE';
+    const [orderRows] = await conn.execute(query, [orderId || orderCode]);
+
+    if (orderRows.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, error: 'Order not found.' });
+    }
+
+    const order = orderRows[0];
+    if (order.user_id !== req.user.id && !['STAFF', 'ADMIN', 'ORGANIZER'].includes(req.user.role)) {
+      await conn.rollback();
+      return res.status(403).json({ success: false, error: 'Access denied.' });
+    }
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const sepayPayload = {
+      id: Date.now(),
+      gateway: 'MBBank',
+      transactionDate: new Date().toISOString(),
+      accountNumber: BANK_ACCOUNT_NO,
+      content: `SECURE ${order.order_code}`,
+      transferType: 'in',
+      transferAmount: Number(order.amount)
+    };
+    const rawBody = JSON.stringify(sepayPayload);
+    const computedHash = crypto.createHmac('sha256', webhookSecret).update(`${timestamp}.${rawBody}`).digest('hex');
+    const expectedSig = `sha256=${computedHash}`;
+
+    const isInvalidAttack = String(attackMode || '').toUpperCase() === 'INVALID_HMAC';
+    const receivedSig = isInvalidAttack
+      ? `sha256=${'0'.repeat(16)}${computedHash.slice(16)}`
+      : expectedSig;
+
+    const sigBuf = Buffer.from(receivedSig);
+    const expBuf = Buffer.from(expectedSig);
+
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      await conn.rollback();
+      await logSecurityEvent({
+        userId: req.user.id,
+        action: 'SEPAY_WEBHOOK_INVALID_SIGNATURE',
+        severity: 'CRITICAL',
+        ipAddress: ip,
+        userAgent,
+        details: { orderId: order.id, orderCode: order.order_code, mode: 'SANDBOX_RED_TEAM', receivedSig }
+      });
+      return res.status(401).json({
+        success: false,
+        errorCode: 'SEPAY_WEBHOOK_INVALID_SIGNATURE',
+        error: 'Chữ ký HMAC-SHA256 Webhook SePay không hợp lệ! (Blocked by Fail-Closed timingSafeEqual)',
+        data: {
+          timestamp,
+          receivedSignature: receivedSig.slice(0, 32) + '...',
+          expectedSignatureSnippet: expectedSig.slice(0, 32) + '...'
+        }
+      });
+    }
+
+    if (order.status === 'PAID') {
+      await conn.rollback();
+      return res.json({
+        success: true,
+        message: 'Đơn hàng đã được thanh toán trước đó.',
+        data: { hmacDigestSnippet: expectedSig.slice(0, 32) + '...', timestamp }
+      });
+    }
+
+    if (order.status === 'EXPIRED' || order.status === 'CANCELLED') {
+      await conn.rollback();
+      return res.status(400).json({ success: false, error: `Đơn hàng đã ở trạng thái ${order.status}.` });
+    }
+
+    const [userRows] = await conn.execute(
+      'SELECT id, email, device_public_key FROM users WHERE id = ?',
+      [order.user_id]
+    );
+    const user = userRows[0];
+    const ticketResult = await issueTicketOnPayment(conn, order, user);
+
+    await conn.commit();
+
+    cleanAndPromoteQueue(order.event_id).catch(err => console.error('[QueuePromote] Error:', err.message));
+
+    await logSecurityEvent({
+      userId: order.user_id,
+      action: 'SEPAY_PAYMENT_SUCCESS',
+      severity: 'INFO',
+      ipAddress: ip,
+      userAgent,
+      details: {
+        orderId: order.id,
+        orderCode: order.order_code,
+        transferAmount: Number(order.amount),
+        ticketId: ticketResult.id,
+        mode: 'SIGNED_WEBHOOK_SIMULATOR'
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Xác thực HMAC-SHA256 thành công! Vé đã được ký số ECDSA P-256 và cấp phát.',
+      data: {
+        ticket: ticketResult,
+        hmacDigestSnippet: expectedSig.slice(0, 32) + '...',
+        timestamp
+      }
+    });
+  } catch (err) {
+    await conn.rollback();
+    console.error('[Payment Simulate Signed Webhook] Error:', err);
+    return res.status(500).json({ success: false, error: 'Internal server error.' });
+  } finally {
+    conn.release();
   }
 });
 
@@ -647,6 +1018,11 @@ router.post('/simulate-transfer', authenticateToken, async (req, res) => {
     if (order.status === 'PAID') {
       await conn.rollback();
       return res.json({ success: true, message: 'Đơn hàng đã được thanh toán trước đó.' });
+    }
+
+    if (order.status === 'EXPIRED' || order.status === 'CANCELLED') {
+      await conn.rollback();
+      return res.status(400).json({ success: false, error: `Đơn hàng đã ở trạng thái ${order.status}.` });
     }
 
     const [userRows] = await conn.execute(

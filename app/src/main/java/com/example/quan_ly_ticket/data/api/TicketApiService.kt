@@ -33,6 +33,9 @@ interface TicketApiService {
     @GET("api/events")
     suspend fun getEvents(): Response<ApiResponse<List<Event>>>
 
+    @GET("api/events/{id}/booking-context")
+    suspend fun getEventBookingContext(@Path("id") eventId: String): Response<ApiResponse<BookingContextData>>
+
     // --- Virtual Waiting Room / Queue ---
     @POST("api/queue/join")
     suspend fun joinQueue(@Body request: JoinQueueRequest): Response<ApiResponse<QueueData>>
@@ -59,15 +62,30 @@ interface TicketApiService {
     @POST("api/tickets/transfer")
     suspend fun transferTicket(@Body request: TransferTicketRequest): Response<ApiResponse<Any>>
 
+    @GET("api/tickets/{id}/provenance")
+    suspend fun getTicketProvenance(@Path("id") ticketId: String): Response<ApiResponse<TicketProvenanceData>>
+
+    @POST("api/tickets/{id}/refund")
+    suspend fun refundTicket(
+        @Path("id") ticketId: String,
+        @Body request: RefundTicketRequest
+    ): Response<ApiResponse<Any>>
+
     // --- Payment & VietQR ---
     @POST("api/payment/create-vietqr")
     suspend fun createPaymentOrder(@Body request: CreateOrderRequest): Response<ApiResponse<CreateOrderData>>
+
+    @GET("api/payment/my-orders")
+    suspend fun getMyOrders(): Response<ApiResponse<List<OrderHistoryItem>>>
 
     @GET("api/payment/order/{orderId}")
     suspend fun getOrderStatus(@Path("orderId") orderId: String): Response<ApiResponse<OrderStatusData>>
 
     @POST("api/payment/simulate-transfer")
     suspend fun simulatePayment(@Body request: SimulatePaymentRequest): Response<ApiResponse<Ticket>>
+
+    @POST("api/payment/simulate-signed-webhook")
+    suspend fun simulateSignedWebhook(@Body request: SignedWebhookSimRequest): Response<ApiResponse<SignedWebhookSimData>>
 
     @POST("api/payment/cancel-order")
     suspend fun cancelOrder(@Body request: CancelOrderRequest): Response<ApiResponse<Any>>

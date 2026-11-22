@@ -1,8 +1,16 @@
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { pool } from '../config/db.js';
 import { authenticateToken, authorizeRoles, getClientInfo } from '../middlewares/authMiddleware.js';
 import { logSecurityEvent } from '../services/auditService.js';
+import {
+  ZONE_TIERS,
+  SEAT_NUMBERS,
+  MAX_ACTIVE_TICKETS_PER_EVENT,
+  computeTierPrice,
+  parseTicketSeat
+} from '../config/ticketTiers.js';
 
 const router = express.Router();
 
@@ -150,6 +158,130 @@ router.put('/:id/status', authenticateToken, authorizeRoles('ORGANIZER', 'ADMIN'
     res.json({ success: true, message: `Đã cập nhật trạng thái sự kiện sang ${status}.` });
   } catch (error) {
     console.error('[Events] Update status error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
+/**
+ * Lấy ngữ cảnh đặt vé & sơ đồ ghế thời gian thực (6 Zone Tiers + ghế đã bán/đang giữ + hạn mức X/6)
+ * GET /api/events/:id/booking-context
+ */
+router.get('/:id/booking-context', async (req, res) => {
+  const { id } = req.params;
+
+  // Optional auth parsing: nếu client gửi Bearer token hợp lệ thì trả về hạn mức cá nhân;
+  // nếu token hết hạn trả 401 để OkHttp TokenAuthenticator tự động refresh
+  let authUserId = null;
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (token && process.env.JWT_SECRET) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      authUserId = decoded?.id || null;
+    } catch (err) {
+      return res.status(401).json({ success: false, error: 'Invalid or expired access token.' });
+    }
+  }
+
+  try {
+    const [eventRows] = await pool.execute(
+      `SELECT e.*, u.full_name as organizer_name
+       FROM events e
+       LEFT JOIN users u ON e.organizer_id = u.id
+       WHERE e.id = ?`,
+      [id]
+    );
+
+    if (eventRows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Event not found.' });
+    }
+
+    const event = eventRows[0];
+
+    const [ticketRows] = await pool.execute(
+      `SELECT ticket_code FROM tickets WHERE event_id = ? AND status IN ('ACTIVE', 'USED')`,
+      [id]
+    );
+
+    const [pendingOrderRows] = await pool.execute(
+      `SELECT seat_zone, seat_number FROM orders
+       WHERE event_id = ? AND status = 'PENDING' AND expires_at > NOW() AND seat_zone IS NOT NULL AND seat_number IS NOT NULL`,
+      [id]
+    );
+
+    const soldSeats = [];
+    const soldSet = new Set();
+    for (const row of ticketRows) {
+      const parsed = parseTicketSeat(row.ticket_code);
+      if (parsed.seatZone && parsed.seatNumber) {
+        const key = `${parsed.seatZone}${parsed.seatNumber}`;
+        if (!soldSet.has(key)) {
+          soldSet.add(key);
+          soldSeats.push(key);
+        }
+      }
+    }
+
+    const heldSeats = [];
+    const heldSet = new Set();
+    for (const row of pendingOrderRows) {
+      const key = `${String(row.seat_zone).toUpperCase()}${row.seat_number}`;
+      if (!soldSet.has(key) && !heldSet.has(key)) {
+        heldSet.add(key);
+        heldSeats.push(key);
+      }
+    }
+
+    let userActiveTickets = 0;
+    let userPendingOrders = 0;
+    if (authUserId) {
+      const [tktCnt] = await pool.execute(
+        `SELECT COUNT(*) as cnt FROM tickets WHERE current_owner_id = ? AND event_id = ? AND status = 'ACTIVE'`,
+        [authUserId, id]
+      );
+      const [ordCnt] = await pool.execute(
+        `SELECT COUNT(*) as cnt FROM orders WHERE user_id = ? AND event_id = ? AND status = 'PENDING' AND expires_at > NOW()`,
+        [authUserId, id]
+      );
+      userActiveTickets = Number(tktCnt[0]?.cnt || 0);
+      userPendingOrders = Number(ordCnt[0]?.cnt || 0);
+    }
+
+    const zones = ZONE_TIERS.map(tier => {
+      let takenInZone = 0;
+      for (const seat of SEAT_NUMBERS) {
+        const key = `${tier.code}${seat}`;
+        if (soldSet.has(key) || heldSet.has(key)) {
+          takenInZone++;
+        }
+      }
+      return {
+        code: tier.code,
+        name: tier.name,
+        multiplier: tier.multiplier,
+        price: computeTierPrice(event.ticket_price, tier.multiplier),
+        perks: tier.perks,
+        totalSeats: SEAT_NUMBERS.length,
+        availableSeats: Math.max(0, SEAT_NUMBERS.length - takenInZone),
+        seatNumbers: SEAT_NUMBERS
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        event,
+        maxTicketsPerEvent: MAX_ACTIVE_TICKETS_PER_EVENT,
+        userActiveTickets,
+        userPendingOrders,
+        userTotalActive: userActiveTickets + userPendingOrders,
+        zones,
+        soldSeats,
+        heldSeats
+      }
+    });
+  } catch (error) {
+    console.error('[Events] Booking context error:', error);
     res.status(500).json({ success: false, error: 'Internal server error.' });
   }
 });

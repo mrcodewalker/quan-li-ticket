@@ -37,6 +37,11 @@ object SecurityCheck {
         val driftSec = kotlin.math.abs((System.currentTimeMillis() - serverEpochMillis) / 1000L)
         lastClockDriftSeconds = driftSec
         isClockTampered = driftSec > 120L
+        if (isClockTampered) {
+            SecurityDebugLog.w("Anti-Time-Cheat", "Clock drift=${driftSec}s exceeds 120s threshold!")
+        } else {
+            SecurityDebugLog.d("Anti-Time-Cheat", "Server clock drift=${driftSec}s (OK)")
+        }
     }
 
     data class SecurityStatus(
@@ -67,6 +72,11 @@ object SecurityCheck {
         val isSecure = !isRooted && !isDebugger && !isFrida && isSigValid
         // Adaptive RASP: Chỉ khóa cứng giao dịch khi chạy bản Release trên môi trường bị can thiệp
         val isRestricted = !BuildConfig.DEBUG && (isRooted || isDebugger || isFrida || !isSigValid)
+
+        SecurityDebugLog.d(
+            "RASP",
+            "rooted=$isRooted debugger=$isDebugger emulator=$isEmulator frida=$isFrida sigValid=$isSigValid restricted=$isRestricted"
+        )
 
         return SecurityStatus(
             isRooted = isRooted,

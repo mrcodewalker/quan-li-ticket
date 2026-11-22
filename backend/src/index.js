@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { validateEnv } from './config/envValidator.js';
 import { testDbConnection } from './config/db.js';
 import { initializeKeys } from './services/cryptoService.js';
@@ -11,10 +13,13 @@ import ticketRoutes from './routes/ticketRoutes.js';
 import validationRoutes from './routes/validationRoutes.js';
 import cryptoRoutes from './routes/cryptoRoutes.js';
 import queueRoutes from './routes/queueRoutes.js';
-import paymentRoutes from './routes/paymentRoutes.js';
+import paymentRoutes, { ensureOrderColumns } from './routes/paymentRoutes.js';
 
 dotenv.config();
 validateEnv();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export const app = express();
 const PORT = process.env.PORT || 5000;
@@ -67,6 +72,20 @@ app.use('/api/crypto', cryptoRoutes);
 app.use('/api/queue', queueRoutes);
 app.use('/api/payment', paymentRoutes);
 
+// PC Security & Red-Team Lab Console (served on PC browser, offloaded from mobile app)
+app.get('/lab', (req, res) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'"
+  );
+  res.sendFile(path.resolve(__dirname, '../public/lab.html'));
+});
+
+app.get('/lab.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.resolve(__dirname, '../public/lab.js'));
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -106,6 +125,7 @@ if (process.env.NODE_ENV !== 'test') {
       console.log('--- Starting SecureTicket Server (Hardened Phase 1-3) ---');
       await testDbConnection();
       await ensureRefreshTokenTable();
+      await ensureOrderColumns();
       await initializeKeys();
 
       app.listen(PORT, '0.0.0.0', () => {

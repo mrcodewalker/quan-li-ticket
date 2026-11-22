@@ -51,16 +51,23 @@ object ApiClient {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .addInterceptor { chain ->
+                val nonce = java.util.UUID.randomUUID().toString().replace("-", "")
+                val ts = (System.currentTimeMillis() / 1000L).toString()
                 val requestBuilder = chain.request().newBuilder()
                     .header("X-Client-Platform", "Android-Native")
-                    .header("X-Request-Timestamp", (System.currentTimeMillis() / 1000L).toString())
-                    .header("X-Request-Nonce", java.util.UUID.randomUUID().toString().replace("-", ""))
+                    .header("X-Request-Timestamp", ts)
+                    .header("X-Request-Nonce", nonce)
                     .header("X-Device-Integrity", apkSigDigest)
                 val token = securePrefs.getAccessToken()
                 if (!token.isNullOrEmpty()) {
                     requestBuilder.header("Authorization", "Bearer $token")
                 }
-                val response = chain.proceed(requestBuilder.build())
+                val req = requestBuilder.build()
+                val response = chain.proceed(req)
+                com.example.quan_ly_ticket.security.SecurityDebugLog.d(
+                    "HTTP-Sec",
+                    "${req.method} ${req.url.encodedPath} -> ${response.code} (ts=$ts, nonce=${nonce.take(8)}...)"
+                )
                 // Anti-Time-Cheat: Đồng bộ kiểm tra độ lệch đồng hồ với Server Date Header
                 response.headers.getDate("Date")?.let { serverDate ->
                     com.example.quan_ly_ticket.security.SecurityCheck.recordServerTimeDrift(serverDate.time)

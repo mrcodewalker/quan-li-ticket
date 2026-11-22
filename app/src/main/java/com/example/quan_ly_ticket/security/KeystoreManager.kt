@@ -139,6 +139,7 @@ object KeystoreManager {
      * Mã hóa dữ liệu bằng khóa AES-256-GCM bên trong AndroidKeyStore (TEE/StrongBox)
      */
     fun encryptWithHardwareAes(plaintext: String, alias: String = KEY_ALIAS_VAULT_AES): String {
+        val t0 = System.nanoTime()
         val secretKey = getOrCreateHardwareAesKey(alias)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, secretKey) // Keystore tự sinh IV ngẫu nhiên an toàn 12 bytes
@@ -151,6 +152,8 @@ object KeystoreManager {
         System.arraycopy(iv, 0, combined, 1, iv.size)
         System.arraycopy(cipherBytes, 0, combined, 1 + iv.size, cipherBytes.size)
 
+        val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+        SecurityDebugLog.d("AES-256-GCM", "Encrypted ${plaintext.length}B with alias=$alias ivLen=${iv.size}B in ${ms}ms")
         return Base64.encodeToString(combined, Base64.NO_WRAP)
     }
 
@@ -158,6 +161,7 @@ object KeystoreManager {
      * Giải mã dữ liệu bằng khóa AES-256-GCM bên trong AndroidKeyStore (TEE/StrongBox)
      */
     fun decryptWithHardwareAes(encryptedBase64: String, alias: String = KEY_ALIAS_VAULT_AES): String {
+        val t0 = System.nanoTime()
         val combined = Base64.decode(encryptedBase64, Base64.DEFAULT)
         require(combined.size > 1 + GCM_IV_LENGTH + 16) { "Ciphertext không hợp lệ hoặc bị cắt cụt" }
 
@@ -171,6 +175,8 @@ object KeystoreManager {
         cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
 
         val plainBytes = cipher.doFinal(cipherBytes)
+        val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+        SecurityDebugLog.d("AES-256-GCM", "Decrypted ${plainBytes.size}B with alias=$alias in ${ms}ms")
         return String(plainBytes, Charsets.UTF_8)
     }
 
@@ -186,6 +192,7 @@ object KeystoreManager {
      * Ký một mảng byte bất kỳ bằng Private Key ECDSA P-256 nằm trong Keystore
      */
     fun signChallenge(challengeBytes: ByteArray): String {
+        val t0 = System.nanoTime()
         getOrCreateDeviceKeyPair()
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val privateKey = keyStore.getKey(KEY_ALIAS_ECDSA, null) as? PrivateKey
@@ -197,6 +204,9 @@ object KeystoreManager {
         }
 
         val signedBytes = signature.sign()
+        val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+        val preview = String(challengeBytes, Charsets.UTF_8).take(40)
+        SecurityDebugLog.d("Keystore-ECDSA", "Signed (${if (isStrongBoxActive) "StrongBox" else "TEE"}) payload='$preview...' in ${ms}ms")
         return Base64.encodeToString(signedBytes, Base64.NO_WRAP)
     }
 
@@ -224,6 +234,19 @@ object KeystoreManager {
         timestamp: Long
     ): String {
         val canonical = "BUY:${eventId.trim()}:$nonce:$timestamp"
+        return signChallenge(canonical.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * Ký số xác nhận giao dịch Hoàn trả / Hủy vé (Hardware-Signed Refund)
+     * Chuỗi chuẩn hóa: REFUND:<ticketId>:<nonce>:<timestamp>
+     */
+    fun signRefundPayload(
+        ticketId: String,
+        nonce: String,
+        timestamp: Long
+    ): String {
+        val canonical = "REFUND:${ticketId.trim()}:$nonce:$timestamp"
         return signChallenge(canonical.toByteArray(Charsets.UTF_8))
     }
 

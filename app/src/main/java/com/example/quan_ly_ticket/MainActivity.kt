@@ -25,6 +25,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.CreateOrderData
+import com.example.quan_ly_ticket.data.model.Event
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.security.SecurityCheck
 import com.example.quan_ly_ticket.ui.components.NavigationTab
@@ -34,6 +35,7 @@ import com.example.quan_ly_ticket.ui.theme.SecureTicketTheme
 enum class Screen {
     LOGIN,
     HOME,
+    EVENT_BOOKING,
     STAFF_DASHBOARD,
     ORGANIZER_DASHBOARD,
     TICKET_DETAIL,
@@ -80,6 +82,7 @@ class MainActivity : FragmentActivity() {
                             if (securePrefs.getAccessToken().isNullOrEmpty()) Screen.LOGIN else homeScreenForRole()
                         )
                     }
+                    var selectedEvent by remember { mutableStateOf<Event?>(null) }
                     var selectedTicket by remember { mutableStateOf<Ticket?>(null) }
                     var activeOrder by remember { mutableStateOf<CreateOrderData?>(null) }
                     var homeTab by remember { mutableStateOf(NavigationTab.HOME) }
@@ -164,6 +167,10 @@ class MainActivity : FragmentActivity() {
                                 Screen.HOME -> HomeScreen(
                                     currentTab = homeTab,
                                     onSelectTab = { homeTab = it },
+                                    onSelectEvent = { ev ->
+                                        selectedEvent = ev
+                                        currentScreen = Screen.EVENT_BOOKING
+                                    },
                                     onSelectTicket = { ticket ->
                                         selectedTicket = ticket
                                         currentScreen = Screen.TICKET_DETAIL
@@ -183,6 +190,21 @@ class MainActivity : FragmentActivity() {
                                         currentScreen = Screen.LOGIN
                                     }
                                 )
+
+                                Screen.EVENT_BOOKING -> {
+                                    selectedEvent?.let { ev ->
+                                        EventBookingScreen(
+                                            event = ev,
+                                            onProceedToPayment = { order ->
+                                                activeOrder = order
+                                                currentScreen = Screen.PAYMENT
+                                            },
+                                            onBack = { currentScreen = Screen.HOME }
+                                        )
+                                    } ?: run {
+                                        currentScreen = Screen.HOME
+                                    }
+                                }
 
                                 Screen.PAYMENT -> {
                                     activeOrder?.let { order ->

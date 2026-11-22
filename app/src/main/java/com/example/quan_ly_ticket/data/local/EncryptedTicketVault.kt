@@ -3,6 +3,7 @@ package com.example.quan_ly_ticket.data.local
 import android.content.Context
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.security.KeystoreManager
+import com.example.quan_ly_ticket.security.SecurityDebugLog
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
@@ -41,7 +42,9 @@ class EncryptedTicketVault(context: Context) {
                 alias = KeystoreManager.KEY_ALIAS_VAULT_AES
             )
             vaultFile.writeText(ciphertextBase64, Charsets.UTF_8)
+            SecurityDebugLog.d("Vault", "Saved ${tickets.size} tickets encrypted to ${vaultFile.name}")
         } catch (e: Exception) {
+            SecurityDebugLog.w("Vault", "saveTicketsEncrypted failed: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -60,8 +63,11 @@ class EncryptedTicketVault(context: Context) {
                 alias = KeystoreManager.KEY_ALIAS_VAULT_AES
             )
             val type = object : TypeToken<List<Ticket>>() {}.type
-            gson.fromJson(json, type) ?: emptyList()
+            val list: List<Ticket> = gson.fromJson(json, type) ?: emptyList()
+            SecurityDebugLog.d("Vault", "Loaded ${list.size} tickets decrypted from ${vaultFile.name}")
+            list
         } catch (e: Exception) {
+            SecurityDebugLog.w("Vault", "loadTicketsDecrypted failed (tampered/invalid key): ${e.message}")
             e.printStackTrace()
             emptyList()
         }

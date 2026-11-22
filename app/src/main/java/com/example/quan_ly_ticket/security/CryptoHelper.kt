@@ -31,6 +31,7 @@ object CryptoHelper {
     ): Boolean {
         if (signatureBase64.isBlank()) return false
         return try {
+            val t0 = System.nanoTime()
             val cleanPubKey = serverPublicKeyBase64
                 .replace("-----BEGIN PUBLIC KEY-----", "")
                 .replace("-----END PUBLIC KEY-----", "")
@@ -46,8 +47,12 @@ object CryptoHelper {
             }
 
             val sigBytes = Base64.decode(signatureBase64, Base64.DEFAULT)
-            signature.verify(sigBytes)
+            val verified = signature.verify(sigBytes)
+            val ms = ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+            SecurityDebugLog.d("ECDSA-Verify", "Offline server signature verified=$verified in ${ms}ms")
+            verified
         } catch (e: Exception) {
+            SecurityDebugLog.w("ECDSA-Verify", "Offline verification failed: ${e.message}")
             false
         }
     }
