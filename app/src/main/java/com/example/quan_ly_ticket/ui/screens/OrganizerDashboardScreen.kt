@@ -54,7 +54,6 @@ import java.text.DecimalFormat
 @Composable
 fun OrganizerDashboardScreen(
     onOpenScanner: () -> Unit,
-    onOpenCryptoLab: () -> Unit,
     onRequireBiometric: (title: String, subtitle: String, onVerified: () -> Unit) -> Unit,
     onLogout: () -> Unit
 ) {
@@ -98,7 +97,7 @@ fun OrganizerDashboardScreen(
         listOf(
             NavTabItem("Sự kiện", Icons.Default.Event),
             NavTabItem("Thu hồi vé", Icons.Default.GppBad),
-            NavTabItem("SIEM An ninh", Icons.Default.Shield)
+            NavTabItem("Nhật ký an ninh", Icons.Default.Shield)
         )
     }
 
@@ -120,7 +119,7 @@ fun OrganizerDashboardScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFEFF6FF)) {
                             Text(
-                                text = "RBAC · ORGANIZER PORTAL",
+                                text = "BAN TỔ CHỨC",
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = PrimaryBlue,
@@ -281,7 +280,7 @@ fun OrganizerDashboardScreen(
                         SemanticAlertBanner(
                             type = AlertType.ERROR,
                             title = "Thu hồi Vé Tức Thì (Instant Revocation)",
-                            message = "Khi phát hiện phe vé hoặc gian lận, Ban tổ chức xác thực sinh trắc học để vô hiệu hóa vé & hủy seed TOTP ngay lập tức. Email khách được che mờ để bảo vệ PII."
+                            message = "Khi phát hiện phe vé hoặc gian lận, Ban tổ chức xác thực sinh trắc học để vô hiệu hóa vé ngay lập tức. Email khách được ẩn bớt để bảo vệ quyền riêng tư."
                         )
 
                         dashboard.recentTickets.forEach { t ->
@@ -359,16 +358,7 @@ fun OrganizerDashboardScreen(
 
                     // ================= TAB 2: TRUNG TÂM GIÁM SÁT AN NINH (SIEM AUDIT LOGS) =================
                     2 -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("SIEM Security Audit Logs", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
-                            TextButton(onClick = onOpenCryptoLab) {
-                                Text("Crypto Lab →", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PrimaryBlue)
-                            }
-                        }
+                        Text("Nhật ký kiểm soát an ninh", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
 
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             listOf("ALL", "CRITICAL", "HIGH", "WARNING", "INFO").forEach { sev ->
@@ -465,7 +455,7 @@ fun OrganizerDashboardScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp).padding(bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Tạo sự kiện mới (RBAC: Organizer)", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
+                Text("Tạo sự kiện mới", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
                 OutlinedTextField(
                     value = evTitle, onValueChange = { evTitle = it },
                     label = { Text("Tên sự kiện / Concert") },
@@ -501,7 +491,7 @@ fun OrganizerDashboardScreen(
                                 val res = ApiClient.getService(context).createEvent(
                                     CreateEventRequest(
                                         title = evTitle.trim(),
-                                        description = "[CONCERT] Sự kiện mới phát hành trực tiếp từ cổng Ban Tổ Chức, bảo vệ chống phe vé ECDSA P-256.",
+                                        description = "[CONCERT] Sự kiện mới phát hành trực tiếp từ cổng Ban Tổ Chức, bảo vệ chống vé giả.",
                                         location = evLocation.trim(),
                                         startTime = "2026-12-30T19:30:00",
                                         endTime = "2026-12-30T23:00:00",

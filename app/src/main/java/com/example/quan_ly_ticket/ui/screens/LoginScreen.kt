@@ -1,4 +1,4 @@
-package com.example.quan_ly_ticket.ui.screens
+    package com.example.quan_ly_ticket.ui.screens
 
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -102,7 +102,7 @@ fun LoginScreen(
                 color = TextDark
             )
             Text(
-                text = "Ví Vé Concert Ký Số ECDSA & Định Danh Phần Cứng",
+                text = "Ví Vé Sự Kiện & Check-in Thông Minh",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = TextMuted,
@@ -129,7 +129,7 @@ fun LoginScreen(
                         modifier = Modifier.size(14.dp)
                     )
                     Text(
-                        text = "Dual-Token (15m/7d) · AES-256-GCM PII · StrongBox TEE",
+                        text = "Vé điện tử chính chủ · Chống giả mạo & Chuyển nhượng an toàn",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = PrimaryNavy
@@ -261,7 +261,7 @@ fun LoginScreen(
 
                                         Toast.makeText(
                                             context,
-                                            "Đăng nhập thành công! Đã lưu Dual-Token & mã hóa PII.",
+                                            "Đăng nhập thành công!",
                                             Toast.LENGTH_SHORT
                                         ).show()
                                         onLoginSuccess(loginData.user.role)
@@ -287,7 +287,7 @@ fun LoginScreen(
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
                         } else {
                             Text(
-                                text = "Đăng nhập & Khởi tạo Phiên An toàn",
+                                text = "Đăng nhập",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.ExtraBold
                             )
@@ -314,7 +314,7 @@ fun LoginScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Tài khoản kiểm thử RBAC",
+                            text = "Tài khoản dùng thử",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = TextDark

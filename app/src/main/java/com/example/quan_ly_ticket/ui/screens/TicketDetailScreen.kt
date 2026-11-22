@@ -74,8 +74,6 @@ fun TicketDetailScreen(
     var currentTotpToken by remember { mutableStateOf("648291") }
     var isNfcActive by remember { mutableStateOf(true) }
     var showTransferModal by remember { mutableStateOf(false) }
-    var showCryptoDetails by remember { mutableStateOf(true) }
-    var signatureCheckResult by remember { mutableStateOf<String?>(null) }
     var isQrShielded by remember { mutableStateOf(false) }
     var shieldReason by remember { mutableStateOf("Đã khóa hiển thị QR để chống chụp lén / pass vé") }
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -105,18 +103,6 @@ fun TicketDetailScreen(
         }
     }
 
-    // Hiệu ứng Hologram bảo mật chuyển động liên tục chống dùng điện thoại thứ 2 chụp ảnh tĩnh
-    val infiniteTransition = rememberInfiniteTransition(label = "anti_pass_hologram")
-    val hologramOffset by infiniteTransition.animateFloat(
-        initialValue = 0.08f,
-        targetValue = 0.92f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "hologram_scan"
-    )
-
     // Kích hoạt vé cho NFC HCE
     DisposableEffect(ticket.id) {
         SecureTicketHceService.activeTicketId = ticket.id
@@ -127,10 +113,12 @@ fun TicketDetailScreen(
         }
     }
 
-    // Dynamic QR & TOTP countdown loop (Xoay vòng mỗi 30 giây chống chụp màn hình)
+    // Dynamic QR & TOTP countdown loop (only regenerate QR bitmap when payload changes every 30s)
     LaunchedEffect(ticket.id, ticket.qrSecretSeed) {
         val seed = ticket.qrSecretSeed ?: "secure-seed-${ticket.id.ifEmpty { "demo" }}"
         val tId = if (ticket.id.isNotEmpty()) ticket.id else "TKT-PREMIUM-001"
+        val sig = ticket.serverSignature.ifEmpty { "MEYCIQC3vXf09N4..." }
+        var lastQrPayload: String? = null
 
         while (isActive) {
             val (token, remaining) = CryptoHelper.generateLocalRotatingCode(tId, seed)
@@ -138,16 +126,18 @@ fun TicketDetailScreen(
             remainingSeconds = remaining
 
             val timeSlice = System.currentTimeMillis() / 30000L
-            val sig = ticket.serverSignature.ifEmpty { "MEYCIQC3vXf09N4..." }
             val qrPayload = """{"tId":"$tId","ts":$timeSlice,"totp":"$token","sig":"$sig"}"""
 
-            try {
-                qrBitmap = withContext(Dispatchers.Default) {
-                    CryptoHelper.generateQrBitmap(qrPayload, size = 512)
+            if (qrPayload != lastQrPayload) {
+                lastQrPayload = qrPayload
+                try {
+                    qrBitmap = withContext(Dispatchers.Default) {
+                        CryptoHelper.generateQrBitmap(qrPayload, size = 512)
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    e.printStackTrace()
                 }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                e.printStackTrace()
             }
 
             delay(1000L)
@@ -182,7 +172,7 @@ fun TicketDetailScreen(
                             color = TextDark
                         )
                         Text(
-                            text = "FLAG_SECURE · Chống chụp màn hình",
+                            text = "Chống chụp màn hình",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = SuccessFg
@@ -258,7 +248,7 @@ fun TicketDetailScreen(
                                     color = Color(0xFF10B981).copy(alpha = 0.25f)
                                 ) {
                                     Text(
-                                        text = "ECDSA VERIFIED",
+                                        text = "VÉ HỢP LỆ",
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.ExtraBold,
                                         color = Color(0xFF6EE7B7),
@@ -274,12 +264,15 @@ fun TicketDetailScreen(
                                 color = Color.White
                             )
                             Spacer(modifier = Modifier.height(17.dp))
+                            val formattedTime = remember(ticket.eventStartTime) {
+                                formatEventTime(ticket.eventStartTime) ?: "14.11.2026 · 18:30"
+                            }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = formatEventTime(ticket.eventStartTime) ?: "14.11.2026 · 18:30",
+                                    text = formattedTime,
                                     fontSize = 11.sp,
                                     color = Color(0xFFD7E0FF),
                                     fontWeight = FontWeight.Medium
@@ -337,7 +330,7 @@ fun TicketDetailScreen(
                                         .background(Color(0xFF29B594))
                                 )
                                 Text(
-                                    text = "MÃ ĐỘNG TOTP (HMAC-SHA256) · ĐỔI SAU $remainingSeconds GIÂY",
+                                    text = "MÃ QR TỰ ĐỘNG LÀM MỚI SAU $remainingSeconds GIÂY",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = Color(0xFF166B5B)
@@ -406,27 +399,11 @@ fun TicketDetailScreen(
                                         }
                                     }
                                 } else if (qrBitmap != null) {
-                                    Box(modifier = Modifier.fillMaxSize()) {
-                                        Image(
-                                            bitmap = qrBitmap!!.asImageBitmap(),
-                                            contentDescription = "Dynamic Secure QR Code",
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                        // Thanh Hologram sống chuyển động liên tục chống chụp ảnh bằng máy thứ 2
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .fillMaxHeight(hologramOffset)
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .height(3.dp)
-                                                    .align(Alignment.BottomCenter)
-                                                    .background(Color(0xFF29B594).copy(alpha = 0.7f))
-                                            )
-                                        }
-                                    }
+                                    Image(
+                                        bitmap = qrBitmap!!.asImageBitmap(),
+                                        contentDescription = "Dynamic Secure QR Code",
+                                        modifier = Modifier.fillMaxSize()
+                                    )
                                 } else {
                                     CircularProgressIndicator(
                                         color = PrimaryBlue,
@@ -435,42 +412,18 @@ fun TicketDetailScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // Nút kiểm thử trực tiếp cơ chế Chặn Chụp Màn Hình / Chặn Pass Vé
-                            TextButton(
-                                onClick = {
-                                    isQrShielded = !isQrShielded
-                                    if (isQrShielded) {
-                                        shieldReason = "Phát hiện thao tác chụp/ghi màn hình! Đã tự động vô hiệu hóa mã QR & NFC."
-                                        SecureTicketHceService.activeTicketId = null
-                                        isNfcActive = false
-                                    } else {
-                                        SecureTicketHceService.activeTicketId = ticket.id
-                                        isNfcActive = true
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                modifier = Modifier.height(26.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ScreenLockPortrait,
-                                    contentDescription = null,
-                                    tint = if (isQrShielded) Color(0xFFDC2626) else PrimaryBlue,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = if (isQrShielded) "Đang bật Khiên Chống Pass Vé (Nhấn để mở)" else "Thử nghiệm Khiên Chặn Chụp/Pass Vé",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isQrShielded) Color(0xFFDC2626) else PrimaryBlue
-                                )
-                            }
-
                             Spacer(modifier = Modifier.height(14.dp))
 
-                            // Progress Bar for 30s countdown
+                            // Smooth Progress Bar for 30s countdown
+                            val smoothProgress by animateFloatAsState(
+                                targetValue = (remainingSeconds / 30f).coerceIn(0f, 1f),
+                                animationSpec = if (remainingSeconds >= 29) {
+                                    tween(durationMillis = 250, easing = FastOutSlowInEasing)
+                                } else {
+                                    tween(durationMillis = 1000, easing = LinearEasing)
+                                },
+                                label = "qr_countdown_progress"
+                            )
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -479,37 +432,19 @@ fun TicketDetailScreen(
                                     .clip(RoundedCornerShape(4.dp))
                                     .background(Color(0xFFE7EAF0))
                             ) {
-                                val progressFraction = (remainingSeconds / 30f).coerceIn(0f, 1f)
                                 Box(
                                     modifier = Modifier
                                         .fillMaxHeight()
-                                        .fillMaxWidth(progressFraction)
+                                        .fillMaxWidth(smoothProgress)
                                         .clip(RoundedCornerShape(4.dp))
                                         .background(PrimaryBlue)
                                 )
                             }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // TOTP code display
-                            val formattedTotp = if (currentTotpToken.length >= 6) {
-                                "${currentTotpToken.take(4)} · ${currentTotpToken.drop(4).take(4)}"
-                            } else {
-                                currentTotpToken
-                            }
-                            Text(
-                                text = "TOTP TOKEN · $formattedTotp",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace,
-                                color = Color(0xFF475569),
-                                letterSpacing = 0.8.sp
-                            )
                         }
                     }
                 }
 
-                // ================= NFC HCE BUTTON / STATUS CARD =================
+                // ================= NFC STATUS CARD =================
                 GlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -539,13 +474,13 @@ fun TicketDetailScreen(
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = if (isNfcActive) "NFC HCE Challenge-Response đang bật" else "NFC đã tạm dừng",
+                                text = if (isNfcActive) "Check-in không chạm NFC đang bật" else "NFC đã tạm dừng",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = Color(0xFF234C85)
                             )
                             Text(
-                                text = "Chạm điện thoại vào máy soát vé (Ký số bằng Private Key trong TEE)",
+                                text = "Chạm điện thoại vào máy soát vé để check-in",
                                 fontSize = 10.sp,
                                 color = Color(0xFF234C85).copy(alpha = 0.8f),
                                 modifier = Modifier.padding(top = 2.dp)
@@ -563,100 +498,6 @@ fun TicketDetailScreen(
                                 color = PrimaryBlue,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
-                        }
-                    }
-                }
-
-                // ================= 4 CƠ CHẾ CHỐNG GIẢ MẠO VÉ (ANTI-COUNTERFEITING CARD) =================
-                GlassCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Column(modifier = Modifier.padding(15.dp)) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { showCryptoDetails = !showCryptoDetails },
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.VerifiedUser,
-                                    contentDescription = null,
-                                    tint = Color(0xFF16836F),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Text(
-                                    text = "4 Lớp Chống Giả Mạo Vé & Chứng Thực Số",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = PrimaryNavy
-                                )
-                            }
-                            Icon(
-                                imageVector = if (showCryptoDetails) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = null,
-                                tint = PrimaryBlue
-                            )
-                        }
-
-                        AnimatedVisibility(visible = showCryptoDetails) {
-                            Column(
-                                modifier = Modifier.padding(top = 10.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                CryptoTerminalBox(
-                                    title = "ECDSA P-256 & TOTP Proof",
-                                    badgeText = "TEE VERIFIED",
-                                    lines = listOf(
-                                        "1. ECDSA P-256 SIG" to (ticket.serverSignature.take(40).ifEmpty { "MEQCIQD8xM9Z0f2... (ECDSA P-256)" } + "..."),
-                                        "2. TOTP NONCE (30S)" to "${ticket.nonce.ifEmpty { "1f48a204e9c7d81a" }} · FLAG_SECURE",
-                                        "3. HARDWARE TEE" to KeystoreManager.getHardwareSecurityLevel(),
-                                        "4. ZERO-TRUST TRANSFER" to "TEE Signature + Biometric + Seed Rotation"
-                                    )
-                                )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                OutlinedButton(
-                                    onClick = {
-                                        val pubKey = securePrefs.getServerPublicKey()
-                                            ?: CryptoHelper.DEFAULT_SERVER_PUBLIC_KEY_BASE64
-                                        val canonical = CryptoHelper.buildTicketCanonicalString(
-                                            ticket = ticket,
-                                            fallbackOwnerId = securePrefs.getUserId() ?: ""
-                                        )
-                                        val isRealVerified = if (ticket.serverSignature.isNotBlank()) {
-                                            CryptoHelper.verifyServerSignature(canonical, ticket.serverSignature, pubKey)
-                                        } else {
-                                            true
-                                        }
-                                        signatureCheckResult = if (isRealVerified || ticket.serverSignature.isNotBlank()) {
-                                            "XÁC MINH THÀNH CÔNG: Chữ ký ECDSA P-256 khớp với Khóa công khai của Server và khóa thiết bị trong AndroidKeyStore TEE!"
-                                        } else {
-                                            "CẢNH BÁO: Chữ ký vé không khớp!"
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Kiểm tra Chữ ký Chống Giả mạo Vé ngay", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
-
-                                if (signatureCheckResult != null) {
-                                    val isSigOk = signatureCheckResult!!.startsWith("XÁC MINH THÀNH CÔNG")
-                                    SemanticAlertBanner(
-                                        type = if (isSigOk) AlertType.SUCCESS else AlertType.ERROR,
-                                        message = signatureCheckResult!!
-                                    )
-                                }
-                            }
                         }
                     }
                 }
@@ -754,7 +595,7 @@ private fun SecureTransferSheet(
             ) {
                 Text(
                     "Vé ${ticket.ticketCode} đã chuyển $transferCount/2 lần. Mỗi vé chỉ được chuyển tối đa 2 lần để chống phe vé. " +
-                        "Sau khi chuyển, mã QR & NFC trên máy bạn bị thu hồi ngay (đổi seed TOTP + ký lại vé).",
+                        "Sau khi chuyển, mã QR & NFC trên máy bạn sẽ hết hiệu lực ngay lập tức.",
                     fontSize = 10.sp, color = Color(0xFF9A3412), lineHeight = 14.sp,
                     modifier = Modifier.padding(10.dp)
                 )
@@ -879,7 +720,7 @@ private fun SecureTransferSheet(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             StatusChip(if (r.kycVerified) "Tài khoản đã xác minh" else "Chưa xác minh", r.kycVerified)
-                            StatusChip(if (r.isDeviceBound) "Đã gắn thiết bị TEE" else "Chưa gắn thiết bị", r.isDeviceBound)
+                            StatusChip(if (r.isDeviceBound) "Thiết bị đã xác minh" else "Chưa xác minh thiết bị", r.isDeviceBound)
                         }
                     }
 
@@ -953,7 +794,7 @@ private fun SecureTransferSheet(
                         }
                     } else {
                         Text(
-                            "Lệnh chuyển sẽ được ký bằng khóa riêng ECDSA P-256 nằm trong chip bảo mật (không thể trích xuất), " +
+                            "Giao dịch sẽ được xác nhận an toàn trên thiết bị này " +
                                 "kèm nonce dùng-một-lần và timestamp ±60s để chống phát lại.",
                             fontSize = 11.sp, color = TextMuted, lineHeight = 16.sp,
                             modifier = Modifier.padding(top = 14.dp)
@@ -1000,8 +841,7 @@ private fun SecureTransferSheet(
                                                     val vault = com.example.quan_ly_ticket.data.local.EncryptedTicketVault(context)
                                                     vault.saveTicketsEncrypted(vault.loadTicketsDecrypted().filter { it.id != ticket.id })
                                                 } catch (_: Exception) { }
-                                                resultMessage = "Chữ ký thiết bị hợp lệ · Server đã ký lại vé cho chủ mới và đổi seed QR. " +
-                                                    "Mã QR cũ trên máy bạn đã vô hiệu."
+                                                resultMessage = "Chuyển nhượng vé thành công! Mã QR cũ trên máy bạn đã hết hiệu lực."
                                             } else {
                                                 errorText = parseError(res.errorBody()?.string()) ?: res.body()?.error
                                                     ?: "Lỗi chuyển nhượng (${res.code()})"

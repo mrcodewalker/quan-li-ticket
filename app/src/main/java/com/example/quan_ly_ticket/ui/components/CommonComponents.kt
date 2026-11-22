@@ -480,9 +480,9 @@ fun PremiumPillSwitch(
             Box(
                 modifier = Modifier
                     .size(19.dp)
+                    .shadow(elevation = 2.dp, shape = CircleShape)
                     .clip(CircleShape)
                     .background(Color.White)
-                    .shadow(elevation = 2.dp, shape = CircleShape)
             )
         }
     }

@@ -17,20 +17,31 @@ class SecurePreferences(private val context: Context) {
 
     companion object {
         private const val PREF_FILE_NAME = "secure_ticket_prefs"
+
+        @Volatile
+        private var cachedPrefs: SharedPreferences? = null
+
+        private fun getOrCreatePrefs(context: Context): SharedPreferences {
+            return cachedPrefs ?: synchronized(this) {
+                cachedPrefs ?: run {
+                    val appCtx = context.applicationContext
+                    val masterKey = MasterKey.Builder(appCtx)
+                        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                        .setRequestStrongBoxBacked(true)
+                        .build()
+                    EncryptedSharedPreferences.create(
+                        appCtx,
+                        PREF_FILE_NAME,
+                        masterKey,
+                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                    ).also { cachedPrefs = it }
+                }
+            }
+        }
     }
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .setRequestStrongBoxBacked(true)
-        .build()
-
-    private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        PREF_FILE_NAME,
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    private val prefs: SharedPreferences = getOrCreatePrefs(context)
 
     fun saveAuthTokens(accessToken: String, refreshToken: String, expiresInSeconds: Int = 900) {
         val nowSeconds = System.currentTimeMillis() / 1000L
@@ -43,6 +54,12 @@ class SecurePreferences(private val context: Context) {
     }
 
     fun getAccessToken(): String? = prefs.getString("access_token", null)
+
+    fun setBiometricEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("biometric_enabled", enabled).apply()
+    }
+
+    fun isBiometricEnabled(): Boolean = prefs.getBoolean("biometric_enabled", true)
 
     fun getRefreshToken(): String? = prefs.getString("refresh_token", null)
 

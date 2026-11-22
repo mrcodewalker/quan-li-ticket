@@ -368,7 +368,7 @@ fun ScannerScreen(
                                 .shadow(6.dp, CircleShape, ambientColor = Color(0xFF6B8CFF), spotColor = Color(0xFF6B8CFF))
                         )
                         Text(
-                            text = if (isValidating) "Đang xác thực ECDSA & TOTP trên server..." else "Sẵn sàng quét vé khách bằng Camera hoặc NFC",
+                            text = if (isValidating) "Đang kiểm tra vé..." else "Sẵn sàng quét vé khách bằng Camera hoặc NFC",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFFCBD5E1)

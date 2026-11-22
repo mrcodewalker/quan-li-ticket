@@ -4,7 +4,11 @@ import android.os.Build
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,10 +70,11 @@ import java.util.UUID
 
 @Composable
 fun HomeScreen(
+    currentTab: NavigationTab = NavigationTab.HOME,
+    onSelectTab: (NavigationTab) -> Unit = {},
     onSelectTicket: (ticket: Ticket) -> Unit,
     onProceedToPayment: (order: CreateOrderData) -> Unit,
     onOpenScanner: () -> Unit,
-    onOpenCryptoLab: () -> Unit,
     onRequireBiometric: (title: String, subtitle: String, onVerified: () -> Unit) -> Unit = { _, _, ok -> ok() },
     onLogout: () -> Unit
 ) {
@@ -80,7 +86,6 @@ fun HomeScreen(
     val userEmail = remember { securePrefs.getUserEmail()?.ifBlank { "customer@secureticket.com" } ?: "customer@secureticket.com" }
     val ticketVault = remember { com.example.quan_ly_ticket.data.local.EncryptedTicketVault(context) }
 
-    var currentTab by remember { mutableStateOf(NavigationTab.HOME) }
     var events by remember { mutableStateOf<List<Event>>(emptyList()) }
     var myTickets by remember { mutableStateOf<List<Ticket>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
@@ -90,11 +95,9 @@ fun HomeScreen(
     var hasLoadedInitialTickets by remember { mutableStateOf(false) }
 
     // Settings state
-    var biometricEnabled by remember { mutableStateOf(true) }
+    var biometricEnabled by remember { mutableStateOf(securePrefs.isBiometricEnabled()) }
     var securityAlertsEnabled by remember { mutableStateOf(true) }
     var logoutConfirmPending by remember { mutableStateOf(false) }
-    var showServerDialog by remember { mutableStateOf(false) }
-    var serverHostInput by remember { mutableStateOf(ApiClient.baseUrl) }
 
     fun refreshData() {
         isLoading = true
@@ -110,17 +113,19 @@ fun HomeScreen(
                 if (ticketRes.isSuccessful && ticketRes.body()?.success == true) {
                     val list = ticketRes.body()!!.data ?: emptyList()
                     myTickets = list
-                    ticketVault.saveTicketsEncrypted(list)
+                    withContext(Dispatchers.IO) {
+                        ticketVault.saveTicketsEncrypted(list)
+                    }
                 } else {
-                    // Fallback to vault
-                    val cached = ticketVault.loadTicketsDecrypted()
+                    // Fallback to vault on IO thread
+                    val cached = withContext(Dispatchers.IO) { ticketVault.loadTicketsDecrypted() }
                     if (cached.isNotEmpty()) {
                         myTickets = cached
                     }
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                val cached = ticketVault.loadTicketsDecrypted()
+                val cached = withContext(Dispatchers.IO) { ticketVault.loadTicketsDecrypted() }
                 if (cached.isNotEmpty()) {
                     myTickets = cached
                 }
@@ -182,7 +187,9 @@ fun HomeScreen(
                     }
                     if (freshList != myTickets) {
                         myTickets = freshList
-                        ticketVault.saveTicketsEncrypted(freshList)
+                        withContext(Dispatchers.IO) {
+                            ticketVault.saveTicketsEncrypted(freshList)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -249,35 +256,29 @@ fun HomeScreen(
                         events = events,
                         isLoading = isLoading,
                         onRefresh = { refreshData() },
-                        onOpenSettings = { currentTab = NavigationTab.SETTINGS },
-                        onOpenTickets = { currentTab = NavigationTab.TICKETS },
+                        onOpenSettings = { onSelectTab(NavigationTab.SETTINGS) },
+                        onOpenTickets = { onSelectTab(NavigationTab.TICKETS) },
                         onOpenScanner = onOpenScanner,
-                        onOpenCryptoLab = onOpenCryptoLab,
                         onBuyEvent = { eventId ->
-                            onRequireBiometric(
-                                "Xác nhận Đặt mua Vé",
-                                "Xác thực Face ID / Vân tay để vào hàng đợi & ký lệnh mua vé bằng TEE"
-                            ) {
-                                scope.launch {
-                                    try {
-                                        val api = ApiClient.getService(context)
-                                        val qRes = api.joinQueue(JoinQueueRequest(eventId))
-                                        if (qRes.isSuccessful && qRes.body()?.success == true && qRes.body()?.data != null) {
-                                            val qData = qRes.body()!!.data!!
-                                            if (qData.status == "ACTIVE") {
-                                                proceedCreateOrder(eventId, qData.passToken)
-                                            } else {
-                                                waitingQueueEventId = eventId
-                                                waitingQueueData = qData
-                                            }
+                            scope.launch {
+                                try {
+                                    val api = ApiClient.getService(context)
+                                    val qRes = api.joinQueue(JoinQueueRequest(eventId))
+                                    if (qRes.isSuccessful && qRes.body()?.success == true && qRes.body()?.data != null) {
+                                        val qData = qRes.body()!!.data!!
+                                        if (qData.status == "ACTIVE") {
+                                            proceedCreateOrder(eventId, qData.passToken)
                                         } else {
-                                            // Fallback trực tiếp nếu server chưa bật queue
-                                            proceedCreateOrder(eventId, null)
+                                            waitingQueueEventId = eventId
+                                            waitingQueueData = qData
                                         }
-                                    } catch (e: Exception) {
-                                        if (e is kotlinx.coroutines.CancellationException) throw e
-                                        Toast.makeText(context, "Lỗi kết nối hàng đợi: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        // Fallback trực tiếp nếu server chưa bật queue
+                                        proceedCreateOrder(eventId, null)
                                     }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Toast.makeText(context, "Lỗi kết nối hàng đợi: ${e.message}", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -287,7 +288,14 @@ fun HomeScreen(
                         tickets = myTickets,
                         isLoading = isLoading,
                         onRefresh = { refreshData() },
-                        onSelectTicket = onSelectTicket
+                        onSelectTicket = { ticket ->
+                            onRequireBiometric(
+                                "Mở vé điện tử",
+                                "Xác thực sinh trắc học để xem mã QR và check-in"
+                            ) {
+                                onSelectTicket(ticket)
+                            }
+                        }
                     )
 
                     NavigationTab.SETTINGS -> SettingsView(
@@ -295,7 +303,20 @@ fun HomeScreen(
                         userEmail = userEmail,
                         securePrefs = securePrefs,
                         biometricEnabled = biometricEnabled,
-                        onToggleBiometric = { biometricEnabled = it },
+                        onToggleBiometric = { enabled ->
+                            if (!enabled) {
+                                onRequireBiometric(
+                                    "Tắt xác thực sinh trắc học",
+                                    "Xác nhận danh tính để tắt bảo vệ sinh trắc học"
+                                ) {
+                                    biometricEnabled = false
+                                    securePrefs.setBiometricEnabled(false)
+                                }
+                            } else {
+                                biometricEnabled = true
+                                securePrefs.setBiometricEnabled(true)
+                            }
+                        },
                         securityAlertsEnabled = securityAlertsEnabled,
                         onToggleSecurityAlerts = { securityAlertsEnabled = it },
                         logoutConfirmPending = logoutConfirmPending,
@@ -316,9 +337,7 @@ fun HomeScreen(
                             } else {
                                 logoutConfirmPending = true
                             }
-                        },
-                        onOpenServerConfig = { showServerDialog = true },
-                        onOpenCryptoLab = onOpenCryptoLab
+                        }
                     )
                 }
                 }
@@ -365,7 +384,7 @@ fun HomeScreen(
             // Floating Frosted-Acrylic Capsule Bottom Navigation
             SecureBottomNav(
                 currentTab = currentTab,
-                onSelectTab = { currentTab = it },
+                onSelectTab = onSelectTab,
                 badgeCount = activeTicketCount,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
@@ -419,45 +438,12 @@ fun HomeScreen(
             }
         )
     }
-
-    if (showServerDialog) {
-        AlertDialog(
-            onDismissRequest = { showServerDialog = false },
-            title = { Text("Địa chỉ Máy chủ (Backend)", fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    Text("Nhập URL Backend (VD: http://10.0.2.2:5000/ cho máy ảo hoặc http://192.168.1.x:5000 cho máy thật):", fontSize = 13.sp)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = serverHostInput,
-                        onValueChange = { serverHostInput = it },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    ApiClient.updateBaseUrl(serverHostInput.trim(), context)
-                    showServerDialog = false
-                    Toast.makeText(context, "Đã cập nhật máy chủ!", Toast.LENGTH_SHORT).show()
-                    refreshData()
-                }) {
-                    Text("Lưu cấu hình")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showServerDialog = false }) {
-                    Text("Hủy")
-                }
-            }
-        )
-    }
 }
 
 /**
  * TAB 1: Khám phá sự kiện — Editorial layout với Spotlight Carousel, Shimmer Skeleton & Date Tile
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeMainView(
     userName: String,
@@ -469,7 +455,6 @@ private fun HomeMainView(
     onOpenSettings: () -> Unit,
     onOpenTickets: () -> Unit,
     onOpenScanner: () -> Unit,
-    onOpenCryptoLab: () -> Unit,
     onBuyEvent: (String) -> Unit
 ) {
     val isStaffOrOrganizer = userRole.uppercase() in listOf("STAFF", "ORGANIZER", "ADMIN")
@@ -492,6 +477,11 @@ private fun HomeMainView(
             .joinToString("") { it.first().uppercase() }.ifBlank { "ST" }
     }
 
+    PullToRefreshBox(
+        isRefreshing = isLoading,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize()
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -521,33 +511,15 @@ private fun HomeMainView(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White)
-                        .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
-                        .clickable { onRefresh() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = PrimaryNavy)
-                    } else {
-                        Icon(Icons.Default.Refresh, contentDescription = "Tải lại", tint = TextDark, modifier = Modifier.size(19.dp))
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(PrimaryNavy)
-                        .clickable { onOpenSettings() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(initials, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-                }
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(PrimaryNavy)
+                    .clickable { onOpenSettings() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(initials, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
             }
         }
 
@@ -568,7 +540,7 @@ private fun HomeMainView(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(if (isStaffOrOrganizer) PrimaryBlue else AccentMint))
                             Text(
-                                text = if (isStaffOrOrganizer) "Cổng soát vé nhân viên · RBAC: $userRole" else "Ví vé bảo mật TEE",
+                                text = if (isStaffOrOrganizer) "Cổng soát vé nhân viên" else "Ví vé điện tử",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = if (isStaffOrOrganizer) PrimaryBlue else AccentTeal
@@ -588,7 +560,7 @@ private fun HomeMainView(
                         color = if (isStaffOrOrganizer) Color(0xFFDCFCE7) else Color(0xFFEFF6FF)
                     ) {
                         Text(
-                            text = if (isStaffOrOrganizer) userRole else "ECDSA P-256",
+                            text = if (isStaffOrOrganizer) "NHÂN VIÊN" else "CHÍNH CHỦ",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (isStaffOrOrganizer) Color(0xFF15803D) else PrimaryBlue,
@@ -598,73 +570,33 @@ private fun HomeMainView(
                 }
 
                 if (isStaffOrOrganizer) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(11.dp))
+                            .background(PrimaryBlue)
+                            .clickable { onOpenScanner() },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1.4f)
-                                .height(44.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(PrimaryBlue)
-                                .clickable { onOpenScanner() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Icon(Icons.Default.QrCodeScanner, null, tint = Color.White, modifier = Modifier.size(18.dp))
-                                Text("Quét mã QR / NFC khách", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(44.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(Color(0xFFF1F5F9))
-                                .clickable { onOpenCryptoLab() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Icon(Icons.Default.Security, null, tint = TextDark, modifier = Modifier.size(16.dp))
-                                Text("Crypto Lab", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextDark)
-                            }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.Default.QrCodeScanner, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Text("Quét mã QR / NFC khách", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
                     }
                 } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .clip(RoundedCornerShape(11.dp))
+                            .background(PrimaryBlue)
+                            .clickable { onOpenTickets() },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(42.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(PrimaryBlue)
-                                .clickable { onOpenTickets() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Icon(Icons.Default.ConfirmationNumber, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                                Text("Mở ví vé", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(42.dp)
-                                .clip(RoundedCornerShape(11.dp))
-                                .background(Color(0xFFF1F5F9))
-                                .clickable { onOpenCryptoLab() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Icon(Icons.Default.Security, null, tint = TextDark, modifier = Modifier.size(16.dp))
-                                Text("Crypto Lab", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextDark)
-                            }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.Default.ConfirmationNumber, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            Text("Mở ví vé", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
                     }
                 }
@@ -878,8 +810,11 @@ private fun HomeMainView(
                             )
 
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                val formattedEventDate = remember(event.startTime, style.tag) {
+                                    formatEventTime(event.startTime) ?: style.tag
+                                }
                                 Text(
-                                    text = formatEventTime(event.startTime) ?: style.tag,
+                                    text = formattedEventDate,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = PrimaryBlue
@@ -925,11 +860,13 @@ private fun HomeMainView(
 
         Spacer(modifier = Modifier.height(92.dp))
     }
+    }
 }
 
 /**
  * TAB 2: Ví vé — Boarding-pass ticket stubs với Shimmer Loading Skeleton
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TicketsWalletView(
     tickets: List<Ticket>,
@@ -956,6 +893,11 @@ private fun TicketsWalletView(
         }
     }
 
+    PullToRefreshBox(
+        isRefreshing = isLoading,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize()
+    ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -971,7 +913,7 @@ private fun TicketsWalletView(
         ) {
             Column {
                 Text(
-                    text = "Kho vé mã hóa AES-256-GCM",
+                    text = "Vé của bạn",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = TextMuted
@@ -985,38 +927,21 @@ private fun TicketsWalletView(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White)
-                        .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
-                        .clickable { onRefresh() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = PrimaryNavy)
-                    } else {
-                        Icon(Icons.Default.Refresh, contentDescription = "Làm mới", tint = TextDark, modifier = Modifier.size(19.dp))
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSearchActive) PrimaryNavy else Color.White)
-                        .border(1.dp, if (isSearchActive) PrimaryNavy else BorderLight, RoundedCornerShape(12.dp))
-                        .clickable { isSearchActive = !isSearchActive },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Tìm kiếm vé",
-                        tint = if (isSearchActive) Color.White else TextDark,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (isSearchActive) PrimaryNavy else Color.White)
+                    .border(1.dp, if (isSearchActive) PrimaryNavy else BorderLight, RoundedCornerShape(12.dp))
+                    .clickable { isSearchActive = !isSearchActive },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Tìm kiếm vé",
+                    tint = if (isSearchActive) Color.White else TextDark,
+                    modifier = Modifier.size(19.dp)
+                )
             }
         }
 
@@ -1036,46 +961,82 @@ private fun TicketsWalletView(
         }
 
         // Segmented Control
-        Row(
+        val isUpcoming = selectedSegment == "upcoming"
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(14.dp))
                 .background(Color(0xFFE9ECF2))
-                .padding(3.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                .padding(4.dp)
         ) {
-            val isUpcoming = selectedSegment == "upcoming"
+            val tabWidth = maxWidth / 2
+            val indicatorOffset by animateDpAsState(
+                targetValue = if (isUpcoming) 0.dp else tabWidth,
+                animationSpec = spring(
+                    dampingRatio = 0.82f,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                label = "wallet_segment_slide"
+            )
+
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .offset(x = indicatorOffset)
+                    .width(tabWidth)
                     .height(38.dp)
+                    .shadow(2.dp, RoundedCornerShape(10.dp), ambientColor = Color(0x140F172A), spotColor = Color(0x140F172A))
                     .clip(RoundedCornerShape(10.dp))
-                    .background(if (isUpcoming) Color.White else Color.Transparent)
-                    .clickable { selectedSegment = "upcoming" },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Sắp tới (${activeTickets.size})",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (isUpcoming) TextDark else TextMuted
+                    .background(Color.White)
+            )
+
+            Row(modifier = Modifier.fillMaxWidth()) {
+                val upcomingTint by animateColorAsState(
+                    targetValue = if (isUpcoming) TextDark else TextMuted,
+                    animationSpec = tween(180),
+                    label = "upcoming_tint"
                 )
-            }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (!isUpcoming) Color.White else Color.Transparent)
-                    .clickable { selectedSegment = "history" },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Lịch sử (${pastTickets.size})",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (!isUpcoming) TextDark else TextMuted
+                val historyTint by animateColorAsState(
+                    targetValue = if (!isUpcoming) TextDark else TextMuted,
+                    animationSpec = tween(180),
+                    label = "history_tint"
                 )
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { selectedSegment = "upcoming" },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Sắp tới (${activeTickets.size})",
+                        fontSize = 12.sp,
+                        fontWeight = if (isUpcoming) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        color = upcomingTint
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { selectedSegment = "history" },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Lịch sử (${pastTickets.size})",
+                        fontSize = 12.sp,
+                        fontWeight = if (!isUpcoming) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        color = historyTint
+                    )
+                }
             }
         }
 
@@ -1084,49 +1045,66 @@ private fun TicketsWalletView(
             repeat(3) {
                 TicketCardSkeleton()
             }
-        } else if (selectedSegment == "upcoming") {
-            if (activeTickets.isEmpty()) {
-                GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(28.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(Icons.Default.ConfirmationNumber, null, tint = TextSubtle, modifier = Modifier.size(36.dp))
-                        Text("Chưa có vé sắp tới", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
-                        Text(
-                            "Mua vé từ mục Khám phá hoặc chờ bạn bè chuyển nhượng vé (ví tự động cập nhật mỗi 5 giây).",
-                            fontSize = 11.sp, color = TextMuted,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                    }
-                }
-            } else {
-                activeTickets.forEach { ticket ->
-                    TicketStubCard(
-                        ticket = ticket,
-                        isPast = false,
-                        onClick = { onSelectTicket(ticket) }
-                    )
-                }
-            }
         } else {
-            if (pastTickets.isEmpty()) {
-                GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("Chưa có vé đã sử dụng", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextMuted)
+            AnimatedContent(
+                targetState = selectedSegment,
+                transitionSpec = {
+                    val direction = if (targetState == "history") 1 else -1
+                    (fadeIn(tween(200, easing = FastOutSlowInEasing)) +
+                        slideInHorizontally(tween(220, easing = FastOutSlowInEasing)) {
+                            direction * (it / 14)
+                        }) togetherWith
+                        fadeOut(tween(140, easing = FastOutSlowInEasing))
+                },
+                label = "wallet_segment_content"
+            ) { seg ->
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    if (seg == "upcoming") {
+                        if (activeTickets.isEmpty()) {
+                            GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(28.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(Icons.Default.ConfirmationNumber, null, tint = TextSubtle, modifier = Modifier.size(36.dp))
+                                    Text("Chưa có vé sắp tới", fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
+                                    Text(
+                                        "Mua vé từ mục Khám phá hoặc chờ bạn bè chuyển nhượng vé (ví tự động cập nhật mỗi 5 giây).",
+                                        fontSize = 11.sp, color = TextMuted,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                        } else {
+                            activeTickets.forEach { ticket ->
+                                TicketStubCard(
+                                    ticket = ticket,
+                                    isPast = false,
+                                    onClick = { onSelectTicket(ticket) }
+                                )
+                            }
+                        }
+                    } else {
+                        if (pastTickets.isEmpty()) {
+                            GlassCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text("Chưa có vé đã sử dụng", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextMuted)
+                                }
+                            }
+                        } else {
+                            pastTickets.forEach { ticket ->
+                                TicketStubCard(
+                                    ticket = ticket,
+                                    isPast = true,
+                                    onClick = { onSelectTicket(ticket) }
+                                )
+                            }
+                        }
                     }
-                }
-            } else {
-                pastTickets.forEach { ticket ->
-                    TicketStubCard(
-                        ticket = ticket,
-                        isPast = true,
-                        onClick = { onSelectTicket(ticket) }
-                    )
                 }
             }
         }
@@ -1144,7 +1122,7 @@ private fun TicketsWalletView(
         ) {
             Icon(Icons.Default.Shield, null, tint = AccentTeal, modifier = Modifier.size(16.dp))
             Text(
-                text = "Tất cả vé được ký số ECDSA P-256 & lưu mã hóa trong AndroidKeyStore TEE.",
+                text = "Vé của bạn được bảo vệ và xác thực tự động trên thiết bị này.",
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
                 color = TextMuted
@@ -1152,6 +1130,7 @@ private fun TicketsWalletView(
         }
 
         Spacer(modifier = Modifier.height(92.dp))
+    }
     }
 }
 
@@ -1168,9 +1147,7 @@ private fun SettingsView(
     securityAlertsEnabled: Boolean,
     onToggleSecurityAlerts: (Boolean) -> Unit,
     logoutConfirmPending: Boolean,
-    onLogoutClick: () -> Unit,
-    onOpenServerConfig: () -> Unit,
-    onOpenCryptoLab: () -> Unit
+    onLogoutClick: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1265,126 +1242,6 @@ private fun SettingsView(
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.8f)
                 )
-            }
-        }
-
-        // PHIÊN ĐĂNG NHẬP DUAL-TOKEN & MÃ HÓA PII Section
-        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Text(
-                text = "PHIÊN DUAL-TOKEN & MÃ HÓA KHÁCH HÀNG (PII)",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFF747C8C),
-                letterSpacing = 0.7.sp,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            )
-
-            GlassCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.VpnKey,
-                                contentDescription = null,
-                                tint = PrimaryBlue,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = "Access Token (15m) & Refresh (7d)",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = TextDark
-                            )
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = Color(0xFFEAF4FF)
-                        ) {
-                            Text(
-                                text = "XOAY VÒNG: $rotationCount LẦN",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = PrimaryBlue,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-
-                    CryptoTerminalBox(
-                        title = "Dual-Token & TEE Vault",
-                        badgeText = "ACTIVE SESSION",
-                        lines = listOf(
-                            "ACCESS JWT" to accessSnippet,
-                            "REFRESH TOKEN" to refreshSnippet,
-                            "PII VAULT" to "AES-256-GCM & AES-256-SIV (AndroidKeyStore TEE)"
-                        )
-                    )
-
-                    Button(
-                        onClick = {
-                            isRotating = true
-                            scope.launch {
-                                try {
-                                    val rTok = securePrefs.getRefreshToken()
-                                    if (!rTok.isNullOrBlank()) {
-                                        val res = ApiClient.getService(context).refreshToken(RefreshTokenRequest(rTok))
-                                        if (res.isSuccessful && res.body()?.success == true && res.body()?.data != null) {
-                                            val d = res.body()!!.data!!
-                                            securePrefs.saveAuthTokens(d.accessToken, d.refreshToken, d.expiresIn)
-                                            rotationCount = securePrefs.incrementRefreshRotationCount()
-                                            accessSnippet = "${d.accessToken.take(16)}...${d.accessToken.takeLast(8)}"
-                                            refreshSnippet = "${d.refreshToken.take(16)}...${d.refreshToken.takeLast(8)}"
-                                            Toast.makeText(
-                                                context,
-                                                "Đã xoay vòng cặp Access & Refresh Token mới!",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        } else {
-                                            Toast.makeText(
-                                                context,
-                                                res.body()?.error ?: "Không thể làm mới token",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
-                                    } else {
-                                        Toast.makeText(context, "Chưa có Refresh Token", Toast.LENGTH_SHORT).show()
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                    Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
-                                } finally {
-                                    isRotating = false
-                                }
-                            }
-                        },
-                        enabled = !isRotating,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (isRotating) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
-                        } else {
-                            Icon(Icons.Default.Autorenew, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Làm mới & Xoay vòng Token ngay (Refresh Rotation)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
             }
         }
 
@@ -1492,195 +1349,12 @@ private fun SettingsView(
             }
         }
 
-        // THIẾT BỊ Section
-        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Text(
-                text = "THIẾT BỊ",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color(0xFF747C8C),
-                letterSpacing = 0.7.sp,
-                modifier = Modifier.padding(horizontal = 4.dp)
-            )
-
-            GlassCard(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFFF0EDFF)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PhoneAndroid,
-                            contentDescription = null,
-                            tint = Color(0xFF6E48B9),
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        val deviceName = if (Build.MODEL.isNullOrBlank() || Build.MODEL.contains("sdk", ignoreCase = true)) {
-                            "Google Pixel 8"
-                        } else {
-                            Build.MODEL
-                        }
-                        Text(
-                            text = deviceName,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextDark
-                        )
-                        Text(
-                            text = "Thiết bị tin cậy · StrongBox",
-                            fontSize = 10.sp,
-                            color = TextMuted,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color(0xFFDCFCE7)
-                    ) {
-                        Text(
-                            text = "ĐÃ XÁC MINH",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color(0xFF16836F),
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-            }
-        }
-
         // TÙY CHỌN & THÔNG TIN Section
         GlassCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp)
         ) {
             Column {
-                // Hardware Security & TEE Attestation row (replaces dead dark-mode toggle)
-                val hardwareLevel = remember { KeystoreManager.getHardwareSecurityLevel() }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 15.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.VerifiedUser,
-                        contentDescription = null,
-                        tint = SuccessFg,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Cấp độ Bảo mật Phần cứng",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextDark
-                        )
-                        Text(
-                            text = "$hardwareLevel · FLAG_SECURE: Bật",
-                            fontSize = 10.sp,
-                            color = TextMuted,
-                            modifier = Modifier.padding(top = 1.dp)
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = SuccessBg
-                    ) {
-                        Text(
-                            text = "TEE ACTIVE",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = SuccessFg,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                        )
-                    }
-                }
-
-                HorizontalDivider(modifier = Modifier.padding(start = 48.dp), color = Color(0xFFECEFF4))
-
-                // Server Backend Config item
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenServerConfig() }
-                        .padding(horizontal = 15.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Dns,
-                        contentDescription = null,
-                        tint = Color(0xFF596174),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "Máy chủ Backend",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextDark,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = ApiClient.baseUrl.take(20) + "...",
-                        fontSize = 10.sp,
-                        color = Color(0xFF6F7788)
-                    )
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = Color(0xFF969DAB),
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-
-                HorizontalDivider(modifier = Modifier.padding(start = 48.dp), color = Color(0xFFECEFF4))
-
-                // Crypto Lab shortcut
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenCryptoLab() }
-                        .padding(horizontal = 15.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = null,
-                        tint = PrimaryBlue,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "Phòng thí nghiệm Mật mã (Lab)",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = PrimaryBlue,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = PrimaryBlue,
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-
-                HorizontalDivider(modifier = Modifier.padding(start = 48.dp), color = Color(0xFFECEFF4))
-
                 // About item
                 Row(
                     modifier = Modifier

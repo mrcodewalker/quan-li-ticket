@@ -27,15 +27,9 @@ import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.CreateOrderData
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.security.SecurityCheck
-import com.example.quan_ly_ticket.ui.components.BiometricAuthDialog
+import com.example.quan_ly_ticket.ui.components.NavigationTab
 import com.example.quan_ly_ticket.ui.screens.*
 import com.example.quan_ly_ticket.ui.theme.SecureTicketTheme
-
-private data class PendingBiometricRequest(
-    val title: String,
-    val subtitle: String,
-    val onVerified: () -> Unit
-)
 
 enum class Screen {
     LOGIN,
@@ -44,7 +38,6 @@ enum class Screen {
     ORGANIZER_DASHBOARD,
     TICKET_DETAIL,
     SCANNER,
-    CRYPTO_LAB,
     PAYMENT
 }
 
@@ -89,15 +82,19 @@ class MainActivity : FragmentActivity() {
                     }
                     var selectedTicket by remember { mutableStateOf<Ticket?>(null) }
                     var activeOrder by remember { mutableStateOf<CreateOrderData?>(null) }
-                    var pendingBiometric by remember { mutableStateOf<PendingBiometricRequest?>(null) }
-                    val hasHardwareBiometric = remember {
-                        BiometricManager.from(this@MainActivity).canAuthenticate(
-                            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                        ) == BiometricManager.BIOMETRIC_SUCCESS
-                    }
+                    var homeTab by remember { mutableStateOf(NavigationTab.HOME) }
 
                     fun requestBiometricAuth(title: String, subtitle: String, onVerified: () -> Unit) {
-                        pendingBiometric = PendingBiometricRequest(title, subtitle, onVerified)
+                        if (!securePrefs.isBiometricEnabled()) {
+                            onVerified()
+                            return
+                        }
+                        showBiometricPrompt(
+                            title = title,
+                            subtitle = subtitle,
+                            allowEmulatorFallback = false,
+                            onSuccess = onVerified
+                        )
                     }
 
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -113,12 +110,12 @@ class MainActivity : FragmentActivity() {
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.GppMaybe,
-                                    contentDescription = "Cảnh báo RASP",
+                                    contentDescription = "Cảnh báo bảo mật",
                                     tint = Color.White,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Text(
-                                    text = "RASP Cảnh báo: Thiết bị có dấu hiệu can thiệp hệ thống (Root/Frida). Các giao dịch nhạy cảm được giám sát.",
+                                    text = "Cảnh báo bảo mật: Thiết bị có dấu hiệu không an toàn. Các giao dịch nhạy cảm đang được giám sát.",
                                     color = Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
@@ -133,9 +130,10 @@ class MainActivity : FragmentActivity() {
                                         currentScreen = homeScreenForRole(role)
                                     },
                                     onTriggerBiometric = {
-                                        requestBiometricAuth(
+                                        showBiometricPrompt(
                                             title = "Xác thực mở Ví vé SecureTicket",
-                                            subtitle = "Quét Face ID, Vân tay hoặc dùng cảm biến sinh trắc học thiết bị"
+                                            subtitle = "Quét Face ID, Vân tay hoặc dùng cảm biến sinh trắc học thiết bị",
+                                            allowEmulatorFallback = false
                                         ) {
                                             if (!securePrefs.getAccessToken().isNullOrEmpty()) {
                                                 currentScreen = homeScreenForRole()
@@ -152,13 +150,11 @@ class MainActivity : FragmentActivity() {
 
                                 Screen.STAFF_DASHBOARD -> StaffDashboardScreen(
                                     onOpenScanner = { currentScreen = Screen.SCANNER },
-                                    onOpenCryptoLab = { currentScreen = Screen.CRYPTO_LAB },
                                     onLogout = { currentScreen = Screen.LOGIN }
                                 )
 
                                 Screen.ORGANIZER_DASHBOARD -> OrganizerDashboardScreen(
                                     onOpenScanner = { currentScreen = Screen.SCANNER },
-                                    onOpenCryptoLab = { currentScreen = Screen.CRYPTO_LAB },
                                     onRequireBiometric = { title, subtitle, onVerified ->
                                         requestBiometricAuth(title, subtitle, onVerified)
                                     },
@@ -166,6 +162,8 @@ class MainActivity : FragmentActivity() {
                                 )
 
                                 Screen.HOME -> HomeScreen(
+                                    currentTab = homeTab,
+                                    onSelectTab = { homeTab = it },
                                     onSelectTicket = { ticket ->
                                         selectedTicket = ticket
                                         currentScreen = Screen.TICKET_DETAIL
@@ -177,13 +175,11 @@ class MainActivity : FragmentActivity() {
                                     onOpenScanner = {
                                         currentScreen = Screen.SCANNER
                                     },
-                                    onOpenCryptoLab = {
-                                        currentScreen = Screen.CRYPTO_LAB
-                                    },
                                     onRequireBiometric = { title, subtitle, onVerified ->
                                         requestBiometricAuth(title, subtitle, onVerified)
                                     },
                                     onLogout = {
+                                        homeTab = NavigationTab.HOME
                                         currentScreen = Screen.LOGIN
                                     }
                                 )
@@ -222,41 +218,8 @@ class MainActivity : FragmentActivity() {
                                 Screen.SCANNER -> ScannerScreen(
                                     onBack = { currentScreen = homeScreenForRole() }
                                 )
-
-                                Screen.CRYPTO_LAB -> CryptoLabScreen(
-                                    onBack = { currentScreen = homeScreenForRole() }
-                                )
                             }
                         }
-                    }
-
-                    // Hộp thoại Giả lập Quét Face ID / Vân tay & Biometric hệ thống
-                    pendingBiometric?.let { req ->
-                        BiometricAuthDialog(
-                            title = req.title,
-                            subtitle = req.subtitle,
-                            hasHardwareBiometric = hasHardwareBiometric,
-                            onUseSystemBiometric = {
-                                val callback = req.onVerified
-                                val t = req.title
-                                val s = req.subtitle
-                                pendingBiometric = null
-                                showBiometricPrompt(
-                                    title = t,
-                                    subtitle = s,
-                                    allowEmulatorFallback = false,
-                                    onSuccess = callback
-                                )
-                            },
-                            onSuccess = {
-                                val callback = req.onVerified
-                                pendingBiometric = null
-                                callback()
-                            },
-                            onDismiss = {
-                                pendingBiometric = null
-                            }
-                        )
                     }
                 }
             }
@@ -264,31 +227,26 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * Xác thực sinh trắc học vân tay / khuôn mặt / PIN khóa máy (Phase 2 FR-11: BIOMETRIC_STRONG or DEVICE_CREDENTIAL)
+     * Xác thực sinh trắc học thật của hệ thống (Face Unlock / Vân tay / Mật khẩu máy)
      */
     private fun showBiometricPrompt(
         title: String,
         subtitle: String,
-        allowEmulatorFallback: Boolean = true,
+        allowEmulatorFallback: Boolean = false,
         onSuccess: () -> Unit
     ) {
+        val authenticators = BiometricManager.Authenticators.BIOMETRIC_WEAK or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
         val biometricManager = BiometricManager.from(this)
-        val canAuthenticate = biometricManager.canAuthenticate(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        )
+        val canAuthenticate = biometricManager.canAuthenticate(authenticators)
 
         if (canAuthenticate != BiometricManager.BIOMETRIC_SUCCESS) {
             if (allowEmulatorFallback) {
-                Toast.makeText(
-                    this,
-                    "Thiết bị chưa cài đặt Vân tay/PIN — Chuyển sang ký số trực tiếp bằng AndroidKeyStore TEE",
-                    Toast.LENGTH_SHORT
-                ).show()
                 onSuccess()
             } else {
                 Toast.makeText(
                     this,
-                    "Thiết bị chưa cài đặt vân tay hoặc mã khóa màn hình.",
+                    "Thiết bị chưa cài đặt sinh trắc học hoặc mã khóa màn hình.",
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -302,18 +260,21 @@ class MainActivity : FragmentActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    Toast.makeText(this@MainActivity, "Xác thực sinh trắc học thành công!", Toast.LENGTH_SHORT).show()
                     onSuccess()
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    Toast.makeText(this@MainActivity, "Hủy/Lỗi sinh trắc học: $errString", Toast.LENGTH_SHORT).show()
+                    if (errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
+                        errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON
+                    ) {
+                        Toast.makeText(this@MainActivity, "Xác thực không thành công: $errString", Toast.LENGTH_SHORT).show()
+                    }
                 }
 
                 override fun onAuthenticationFailed() {
                     super.onAuthenticationFailed()
-                    Toast.makeText(this@MainActivity, "Không nhận diện được vân tay/khuôn mặt.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Không nhận diện được sinh trắc học.", Toast.LENGTH_SHORT).show()
                 }
             }
         )
@@ -321,9 +282,7 @@ class MainActivity : FragmentActivity() {
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
             .setTitle(title)
             .setSubtitle(subtitle)
-            .setAllowedAuthenticators(
-                BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-            )
+            .setAllowedAuthenticators(authenticators)
             .build()
 
         prompt.authenticate(promptInfo)

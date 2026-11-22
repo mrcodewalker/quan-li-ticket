@@ -43,7 +43,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun StaffDashboardScreen(
     onOpenScanner: () -> Unit,
-    onOpenCryptoLab: () -> Unit,
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
@@ -103,7 +102,7 @@ fun StaffDashboardScreen(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFDCFCE7)) {
                             Text(
-                                text = "RBAC · STAFF",
+                                text = "NHÂN VIÊN SOÁT VÉ",
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = Color(0xFF15803D),
@@ -178,7 +177,7 @@ fun StaffDashboardScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Trạm soát vé sự kiện", fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
                             Text(
-                                "Xác thực chữ ký ECDSA P-256, mã động TOTP 30s & Challenge-Response NFC",
+                                "Quét mã QR hoặc chạm NFC để check-in cho khách",
                                 fontSize = 11.sp,
                                 color = TextMuted,
                                 lineHeight = 15.sp
@@ -195,16 +194,6 @@ fun StaffDashboardScreen(
                         Icon(Icons.Default.QrCodeScanner, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("Mở Camera Quét QR / NFC Khách", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
-                    }
-
-                    OutlinedButton(
-                        onClick = onOpenCryptoLab,
-                        modifier = Modifier.fillMaxWidth().height(40.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.Security, null, tint = PrimaryBlue, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Mở Phòng Lab Kiểm Chứng Mật Mã", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PrimaryBlue)
                     }
                 }
             }
