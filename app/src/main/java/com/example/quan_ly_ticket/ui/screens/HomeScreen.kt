@@ -3,6 +3,8 @@ package com.example.quan_ly_ticket.ui.screens
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.animation.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -43,6 +45,7 @@ import com.example.quan_ly_ticket.data.model.RefreshTokenRequest
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.security.KeystoreManager
 import com.example.quan_ly_ticket.security.SecurityCheck
+import com.example.quan_ly_ticket.ui.components.CryptoTerminalBox
 import com.example.quan_ly_ticket.ui.components.EventCardSkeleton
 import com.example.quan_ly_ticket.ui.components.EventCoverImage
 import com.example.quan_ly_ticket.ui.components.GlassCard
@@ -89,7 +92,6 @@ fun HomeScreen(
     // Settings state
     var biometricEnabled by remember { mutableStateOf(true) }
     var securityAlertsEnabled by remember { mutableStateOf(true) }
-    var isDarkMode by remember { mutableStateOf(false) }
     var logoutConfirmPending by remember { mutableStateOf(false) }
     var showServerDialog by remember { mutableStateOf(false) }
     var serverHostInput by remember { mutableStateOf(ApiClient.baseUrl) }
@@ -117,6 +119,7 @@ fun HomeScreen(
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 val cached = ticketVault.loadTicketsDecrypted()
                 if (cached.isNotEmpty()) {
                     myTickets = cached
@@ -152,6 +155,7 @@ fun HomeScreen(
                     Toast.makeText(context, res.body()?.error ?: "Lỗi tạo đơn đặt vé", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
@@ -181,7 +185,9 @@ fun HomeScreen(
                         ticketVault.saveTicketsEncrypted(freshList)
                     }
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            }
         }
     }
 
@@ -199,7 +205,7 @@ fun HomeScreen(
                     if (updated.status == "ACTIVE" && !updated.passToken.isNullOrBlank()) {
                         waitingQueueData = null
                         waitingQueueEventId = null
-                        Toast.makeText(context, "🎉 Đến lượt bạn! Đang mở cổng thanh toán VietQR...", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Đến lượt bạn! Đang mở cổng thanh toán VietQR...", Toast.LENGTH_SHORT).show()
                         proceedCreateOrder(evId, updated.passToken)
                         break
                     } else if (updated.status == "WAITING") {
@@ -210,31 +216,36 @@ fun HomeScreen(
                         break
                     }
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            }
         }
     }
 
+    val activeTicketCount = remember(myTickets) {
+        myTickets.count { it.status == "ACTIVE" || it.status == null }
+    }
+
     AppBackground {
-        Scaffold(
-            containerColor = Color.Transparent,
-            contentWindowInsets = WindowInsets(0, 0, 0, 0),
-            bottomBar = {
-                SecureBottomNav(
-                    currentTab = currentTab,
-                    onSelectTab = { currentTab = it }
-                )
-            }
-        ) { padding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            ) {
-                when (currentTab) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                AnimatedContent(
+                    targetState = currentTab,
+                    transitionSpec = {
+                        val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                        (fadeIn(animationSpec = tween(200, easing = FastOutSlowInEasing)) +
+                            slideInHorizontally(animationSpec = tween(220, easing = FastOutSlowInEasing)) {
+                                direction * (it / 16)
+                            }) togetherWith
+                            fadeOut(animationSpec = tween(140, easing = FastOutSlowInEasing))
+                    },
+                    label = "home_tab_transition"
+                ) { tab ->
+                when (tab) {
                     NavigationTab.HOME -> HomeMainView(
                         userName = userName,
                         userRole = userRole,
-                        ticketCount = myTickets.count { it.status == "ACTIVE" || it.status == null },
+                        ticketCount = activeTicketCount,
                         events = events,
                         isLoading = isLoading,
                         onRefresh = { refreshData() },
@@ -264,6 +275,7 @@ fun HomeScreen(
                                             proceedCreateOrder(eventId, null)
                                         }
                                     } catch (e: Exception) {
+                                        if (e is kotlinx.coroutines.CancellationException) throw e
                                         Toast.makeText(context, "Lỗi kết nối hàng đợi: ${e.message}", Toast.LENGTH_SHORT).show()
                                     }
                                 }
@@ -286,8 +298,6 @@ fun HomeScreen(
                         onToggleBiometric = { biometricEnabled = it },
                         securityAlertsEnabled = securityAlertsEnabled,
                         onToggleSecurityAlerts = { securityAlertsEnabled = it },
-                        isDarkMode = isDarkMode,
-                        onToggleDarkMode = { isDarkMode = it },
                         logoutConfirmPending = logoutConfirmPending,
                         onLogoutClick = {
                             if (logoutConfirmPending) {
@@ -310,6 +320,7 @@ fun HomeScreen(
                         onOpenServerConfig = { showServerDialog = true },
                         onOpenCryptoLab = onOpenCryptoLab
                     )
+                }
                 }
 
                 // Banner thông báo khi Bên B tự động polling nhận được vé chuyển nhượng mới từ Bên A
@@ -350,6 +361,14 @@ fun HomeScreen(
                     }
                 }
             }
+
+            // Floating Frosted-Acrylic Capsule Bottom Navigation
+            SecureBottomNav(
+                currentTab = currentTab,
+                onSelectTab = { currentTab = it },
+                badgeCount = activeTicketCount,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     }
 
@@ -904,7 +923,7 @@ private fun HomeMainView(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(92.dp))
     }
 }
 
@@ -1132,7 +1151,7 @@ private fun TicketsWalletView(
             )
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(92.dp))
     }
 }
 
@@ -1148,8 +1167,6 @@ private fun SettingsView(
     onToggleBiometric: (Boolean) -> Unit,
     securityAlertsEnabled: Boolean,
     onToggleSecurityAlerts: (Boolean) -> Unit,
-    isDarkMode: Boolean,
-    onToggleDarkMode: (Boolean) -> Unit,
     logoutConfirmPending: Boolean,
     onLogoutClick: () -> Unit,
     onOpenServerConfig: () -> Unit,
@@ -1306,21 +1323,14 @@ private fun SettingsView(
                         }
                     }
 
-                    Text(
-                        text = "• Access JWT: $accessSnippet",
-                        fontSize = 10.sp,
-                        color = TextMuted
-                    )
-                    Text(
-                        text = "• Refresh Token: $refreshSnippet",
-                        fontSize = 10.sp,
-                        color = Color(0xFF16836F)
-                    )
-                    Text(
-                        text = "• Hồ sơ KH (PII): Đã mã hóa AES-256-GCM & AES-256-SIV trong TEE",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = PrimaryNavy
+                    CryptoTerminalBox(
+                        title = "Dual-Token & TEE Vault",
+                        badgeText = "ACTIVE SESSION",
+                        lines = listOf(
+                            "ACCESS JWT" to accessSnippet,
+                            "REFRESH TOKEN" to refreshSnippet,
+                            "PII VAULT" to "AES-256-GCM & AES-256-SIV (AndroidKeyStore TEE)"
+                        )
                     )
 
                     Button(
@@ -1353,6 +1363,7 @@ private fun SettingsView(
                                         Toast.makeText(context, "Chưa có Refresh Token", Toast.LENGTH_SHORT).show()
                                     }
                                 } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
                                 } finally {
                                     isRotating = false
@@ -1556,39 +1567,47 @@ private fun SettingsView(
             shape = RoundedCornerShape(18.dp)
         ) {
             Column {
-                // Theme item
+                // Hardware Security & TEE Attestation row (replaces dead dark-mode toggle)
+                val hardwareLevel = remember { KeystoreManager.getHardwareSecurityLevel() }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onToggleDarkMode(!isDarkMode) }
                         .padding(horizontal = 15.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.DarkMode,
+                        imageVector = Icons.Default.VerifiedUser,
                         contentDescription = null,
-                        tint = Color(0xFF596174),
+                        tint = SuccessFg,
                         modifier = Modifier.size(20.dp)
                     )
-                    Text(
-                        text = "Giao diện",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextDark,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        text = if (isDarkMode) "Tối" else "Theo hệ thống",
-                        fontSize = 11.sp,
-                        color = Color(0xFF6F7788)
-                    )
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = Color(0xFF969DAB),
-                        modifier = Modifier.size(17.dp)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Cấp độ Bảo mật Phần cứng",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextDark
+                        )
+                        Text(
+                            text = "$hardwareLevel · FLAG_SECURE: Bật",
+                            fontSize = 10.sp,
+                            color = TextMuted,
+                            modifier = Modifier.padding(top = 1.dp)
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = SuccessBg
+                    ) {
+                        Text(
+                            text = "TEE ACTIVE",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = SuccessFg,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        )
+                    }
                 }
 
                 HorizontalDivider(modifier = Modifier.padding(start = 48.dp), color = Color(0xFFECEFF4))
@@ -1711,6 +1730,6 @@ private fun SettingsView(
             )
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(92.dp))
     }
 }

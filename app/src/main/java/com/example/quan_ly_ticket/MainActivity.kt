@@ -8,10 +8,14 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.GppMaybe
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -99,14 +103,22 @@ class MainActivity : FragmentActivity() {
                     Column(modifier = Modifier.fillMaxSize()) {
                         // Phase 3 (FR-19): Adaptive RASP Security Banner khi phát hiện môi trường rủi ro trên bản Release
                         if (securityStatus.isRestrictedMode) {
-                            Box(
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(Color(0xFFB91C1C))
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
+                                Icon(
+                                    imageVector = Icons.Default.GppMaybe,
+                                    contentDescription = "Cảnh báo RASP",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
                                 Text(
-                                    text = "⚠️ RASP Cảnh báo: Thiết bị có dấu hiệu can thiệp hệ thống (Root/Frida). Các giao dịch nhạy cảm được giám sát.",
+                                    text = "RASP Cảnh báo: Thiết bị có dấu hiệu can thiệp hệ thống (Root/Frida). Các giao dịch nhạy cảm được giám sát.",
                                     color = Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold

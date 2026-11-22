@@ -3,6 +3,7 @@ package com.example.quan_ly_ticket.ui.components
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -10,16 +11,23 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ConfirmationNumber
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
@@ -87,7 +96,8 @@ fun EventCoverImage(
                 conn.inputStream.use { stream ->
                     BitmapFactory.decodeStream(stream)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 null
             }
         }
@@ -115,7 +125,7 @@ fun EventCoverImage(
 }
 
 /**
- * Clean solid white card with hairline border and grounded elevation.
+ * Clean solid white card with hairline border, grounded elevation, and optional press-scale feedback.
  */
 @Composable
 fun GlassCard(
@@ -124,17 +134,39 @@ fun GlassCard(
     backgroundColor: Color = Color.White,
     borderColor: Color = BorderLight,
     elevation: Dp = 1.dp,
+    onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (onClick != null && isPressed) 0.985f else 1f,
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMedium),
+        label = "glass_card_scale"
+    )
+
+    val cardModifier = modifier
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .shadow(
+            elevation = elevation,
+            shape = shape,
+            ambientColor = Color(0x120F172A),
+            spotColor = Color(0x120F172A)
+        )
+        .border(width = 1.dp, color = borderColor, shape = shape)
+        .let { base ->
+            if (onClick != null) {
+                base.clickable(interactionSource = interactionSource, indication = null) { onClick() }
+            } else {
+                base
+            }
+        }
+
     Surface(
-        modifier = modifier
-            .shadow(
-                elevation = elevation,
-                shape = shape,
-                ambientColor = Color(0x120F172A),
-                spotColor = Color(0x120F172A)
-            )
-            .border(width = 1.dp, color = borderColor, shape = shape),
+        modifier = cardModifier,
         shape = shape,
         color = backgroundColor
     ) {
@@ -230,10 +262,21 @@ fun TicketStubCard(
     onClick: () -> Unit
 ) {
     val style = remember(ticket.eventTitle) { posterStyleForEvent(ticket.eventTitle) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.985f else 1f,
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMedium),
+        label = "ticket_stub_scale"
+    )
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .shadow(
                 elevation = if (isPast) 1.dp else 2.dp,
                 shape = RoundedCornerShape(18.dp),
@@ -243,7 +286,7 @@ fun TicketStubCard(
             .clip(RoundedCornerShape(18.dp))
             .background(Color.White)
             .border(1.dp, BorderLight, RoundedCornerShape(18.dp))
-            .clickable { onClick() }
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() }
     ) {
         // Top Ticket Info with Real Event Thumbnail
         Row(
@@ -276,15 +319,28 @@ fun TicketStubCard(
                     )
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = if (isPast) Color(0xFFF1F5F9) else Color(0xFFDCFCE7)
+                        color = if (isPast) Color(0xFFF1F5F9) else SuccessBg
                     ) {
-                        Text(
-                            text = if (isPast) "Đã dùng" else "Hợp lệ",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isPast) TextMuted else Color(0xFF15803D),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            if (!isPast) {
+                                Icon(
+                                    imageVector = Icons.Default.VerifiedUser,
+                                    contentDescription = null,
+                                    tint = SuccessFg,
+                                    modifier = Modifier.size(10.dp)
+                                )
+                            }
+                            Text(
+                                text = if (isPast) "Đã dùng" else "Hợp lệ",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isPast) TextMuted else SuccessFg
+                            )
+                        }
                     }
                 }
 
@@ -347,6 +403,7 @@ fun TicketStubCard(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.ExtraBold,
                     fontFamily = FontFamily.Monospace,
+                    style = androidx.compose.ui.text.TextStyle(fontFeatureSettings = "tnum"),
                     color = if (isPast) TextMuted else TextDark
                 )
                 Row(
@@ -437,80 +494,385 @@ enum class NavigationTab {
     SETTINGS
 }
 
+data class NavTabItem(
+    val label: String,
+    val icon: ImageVector,
+    val badgeCount: Int = 0
+)
+
 /**
- * Clean docked bottom navigation bar with hairline border and pill indicator.
+ * Floating frosted-acrylic capsule bottom navigation shared by Customer and Organizer portals.
+ * Uses multi-layer translucent acrylic + 1dp top-lit specular border + spring pill selection.
+ */
+@Composable
+fun FrostedCapsuleBottomNav(
+    items: List<NavTabItem>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val safeIndex = selectedIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .widthIn(max = 380.dp)
+                .fillMaxWidth()
+                .shadow(
+                    elevation = 14.dp,
+                    shape = RoundedCornerShape(32.dp),
+                    ambientColor = Color(0x1F0F172A),
+                    spotColor = Color(0x1A0F172A)
+                )
+                .clip(RoundedCornerShape(32.dp))
+                .background(FrostedAcrylicBrush)
+                .border(1.dp, SpecularBorderBrush, RoundedCornerShape(32.dp))
+                .padding(6.dp)
+        ) {
+            val tabWidth = if (items.isNotEmpty()) maxWidth / items.size else 0.dp
+            val indicatorOffset by animateDpAsState(
+                targetValue = tabWidth * safeIndex,
+                animationSpec = spring(
+                    dampingRatio = 0.82f,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                label = "nav_pill_slide"
+            )
+
+            // Solid sliding active pill indicator (no stroke)
+            if (items.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .offset(x = indicatorOffset)
+                        .width(tabWidth)
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(PrimaryBlue)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                items.forEachIndexed { index, item ->
+                    val isSelected = index == safeIndex
+                    val interactionSource = remember { MutableInteractionSource() }
+                    val isPressed by interactionSource.collectIsPressedAsState()
+                    val pressScale by animateFloatAsState(
+                        targetValue = if (isPressed) 0.94f else 1f,
+                        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium),
+                        label = "nav_item_press"
+                    )
+                    val iconScale by animateFloatAsState(
+                        targetValue = if (isSelected) 1.08f else 1f,
+                        animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow),
+                        label = "nav_icon_scale"
+                    )
+                    val tint by animateColorAsState(
+                        targetValue = if (isSelected) Color.White else TextMuted,
+                        animationSpec = tween(durationMillis = 200),
+                        label = "nav_tint"
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .graphicsLayer {
+                                scaleX = pressScale
+                                scaleY = pressScale
+                            }
+                            .clip(RoundedCornerShape(24.dp))
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null
+                            ) { onSelect(index) }
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = item.icon,
+                            contentDescription = item.label,
+                            tint = tint,
+                            modifier = Modifier
+                                .size(19.dp)
+                                .graphicsLayer {
+                                    scaleX = iconScale
+                                    scaleY = iconScale
+                                }
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = item.label,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                            color = tint,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (item.badgeCount > 0) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isSelected) Color.White else TextDark)
+                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = item.badgeCount.toString(),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (isSelected) PrimaryBlue else Color.White,
+                                    style = androidx.compose.ui.text.TextStyle(fontFeatureSettings = "tnum")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Customer bottom navigation wrapping FrostedCapsuleBottomNav.
  */
 @Composable
 fun SecureBottomNav(
     currentTab: NavigationTab,
     onSelectTab: (NavigationTab) -> Unit,
+    badgeCount: Int = 0,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier.fillMaxWidth().background(Color.White)) {
-        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(BorderLight))
+    val tabs = NavigationTab.entries
+    val items = remember(badgeCount) {
+        listOf(
+            NavTabItem("Khám phá", Icons.Default.Home),
+            NavTabItem("Ví vé", Icons.Default.ConfirmationNumber, badgeCount = badgeCount),
+            NavTabItem("Cài đặt", Icons.Default.Settings)
+        )
+    }
+    FrostedCapsuleBottomNav(
+        items = items,
+        selectedIndex = tabs.indexOf(currentTab).coerceAtLeast(0),
+        onSelect = { idx -> onSelectTab(tabs[idx]) },
+        modifier = modifier
+    )
+}
+
+/**
+ * Frosted circular icon button with >= 44dp touch target, specular border, and press-scale feedback.
+ */
+@Composable
+fun FrostedIconButton(
+    icon: ImageVector,
+    contentDescription: String?,
+    onClick: () -> Unit,
+    tint: Color = TextDark,
+    darkMode: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.92f else 1f,
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMedium),
+        label = "frosted_icon_scale"
+    )
+
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .shadow(
+                elevation = if (darkMode) 0.dp else 6.dp,
+                shape = CircleShape,
+                ambientColor = Color(0x140F172A),
+                spotColor = Color(0x140F172A)
+            )
+            .clip(CircleShape)
+            .let {
+                if (darkMode) it.background(FrostedDarkSurface)
+                else it.background(FrostedAcrylicBrush)
+            }
+            .border(
+                width = 1.dp,
+                brush = if (darkMode) DarkFrostedBorderBrush else SpecularBorderBrush,
+                shape = CircleShape
+            )
+            .clickable(interactionSource = interactionSource, indication = null) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/**
+ * High-contrast dark obsidian terminal block for cryptographic proofs, JWTs, and ciphertexts.
+ */
+@Composable
+fun CryptoTerminalBox(
+    title: String,
+    badgeText: String? = null,
+    badgeColor: Color = TerminalTextEmerald,
+    lines: List<Pair<String, String>>,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(TerminalBg)
+            .border(1.dp, TerminalBorder, RoundedCornerShape(14.dp))
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(66.dp)
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.SpaceAround,
+                .background(TerminalHeaderBg)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            BottomNavItem(
-                icon = Icons.Default.Home,
-                label = "Khám phá",
-                isSelected = currentTab == NavigationTab.HOME,
-                onClick = { onSelectTab(NavigationTab.HOME) }
-            )
-            BottomNavItem(
-                icon = Icons.Default.ConfirmationNumber,
-                label = "Ví vé",
-                isSelected = currentTab == NavigationTab.TICKETS,
-                onClick = { onSelectTab(NavigationTab.TICKETS) }
-            )
-            BottomNavItem(
-                icon = Icons.Default.Settings,
-                label = "Cài đặt",
-                isSelected = currentTab == NavigationTab.SETTINGS,
-                onClick = { onSelectTab(NavigationTab.SETTINGS) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Terminal,
+                    contentDescription = null,
+                    tint = TerminalTextCyan,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = title.uppercase(),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    color = TerminalTextMuted,
+                    letterSpacing = 0.6.sp
+                )
+            }
+            if (!badgeText.isNullOrBlank()) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(badgeColor.copy(alpha = 0.16f))
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = badgeText,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = badgeColor
+                    )
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            lines.forEach { (label, value) ->
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (label.isNotBlank()) {
+                        Text(
+                            text = label,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace,
+                            color = TerminalTextCyan
+                        )
+                    }
+                    Text(
+                        text = value,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TerminalTextLight,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+enum class AlertType {
+    SUCCESS,
+    WARNING,
+    ERROR,
+    INFO
+}
+
+/**
+ * Vector-based semantic status banner replacing all inline emoji callouts.
+ */
+@Composable
+fun SemanticAlertBanner(
+    type: AlertType,
+    message: String,
+    title: String? = null,
+    modifier: Modifier = Modifier
+) {
+    val (bg, fg, border, icon) = when (type) {
+        AlertType.SUCCESS -> Quadruple(SuccessBg, SuccessFg, SuccessBorder, Icons.Default.CheckCircle)
+        AlertType.WARNING -> Quadruple(WarningBg, WarningFg, WarningBorder, Icons.Default.Warning)
+        AlertType.ERROR -> Quadruple(DangerBg, DangerFg, DangerBorder, Icons.Default.Error)
+        AlertType.INFO -> Quadruple(InfoBg, InfoFg, InfoBorder, Icons.Default.Info)
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(bg)
+            .border(1.dp, border, RoundedCornerShape(12.dp))
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = fg,
+            modifier = Modifier.size(18.dp).padding(top = 1.dp)
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            if (!title.isNullOrBlank()) {
+                Text(
+                    text = title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = fg
+                )
+            }
+            Text(
+                text = message,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                color = fg
             )
         }
     }
 }
 
-@Composable
-private fun BottomNavItem(
-    icon: ImageVector,
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    val tint = if (isSelected) PrimaryBlue else TextSubtle
-    val pillBg = if (isSelected) Color(0xFFEFF6FF) else Color.Transparent
-
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(pillBg)
-            .clickable(
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() }
-            ) { onClick() }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = tint,
-            modifier = Modifier.size(21.dp)
-        )
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
-            color = tint
-        )
-    }
-}
+private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)

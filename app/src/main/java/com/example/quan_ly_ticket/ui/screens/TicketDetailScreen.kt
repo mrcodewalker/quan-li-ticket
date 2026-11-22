@@ -44,8 +44,12 @@ import com.example.quan_ly_ticket.data.model.VerifyRecipientRequest
 import com.example.quan_ly_ticket.security.CryptoHelper
 import com.example.quan_ly_ticket.security.KeystoreManager
 import com.example.quan_ly_ticket.service.SecureTicketHceService
+import com.example.quan_ly_ticket.ui.components.AlertType
+import com.example.quan_ly_ticket.ui.components.CryptoTerminalBox
 import com.example.quan_ly_ticket.ui.components.EventCoverImage
+import com.example.quan_ly_ticket.ui.components.FrostedIconButton
 import com.example.quan_ly_ticket.ui.components.GlassCard
+import com.example.quan_ly_ticket.ui.components.SemanticAlertBanner
 import com.example.quan_ly_ticket.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -142,6 +146,7 @@ fun TicketDetailScreen(
                     CryptoHelper.generateQrBitmap(qrPayload, size = 512)
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 e.printStackTrace()
             }
 
@@ -163,23 +168,11 @@ fun TicketDetailScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color.White.copy(alpha = 0.88f))
-                            .border(1.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(14.dp))
-                            .shadow(elevation = 6.dp, shape = RoundedCornerShape(14.dp))
-                            .clickable { onBack() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Quay lại",
-                            tint = TextDark,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    FrostedIconButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Quay lại",
+                        onClick = onBack
+                    )
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
@@ -192,27 +185,16 @@ fun TicketDetailScreen(
                             text = "FLAG_SECURE · Chống chụp màn hình",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF16836F)
+                            color = SuccessFg
                         )
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color.White.copy(alpha = 0.88f))
-                            .border(1.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(14.dp))
-                            .shadow(elevation = 6.dp, shape = RoundedCornerShape(14.dp))
-                            .clickable { showTransferModal = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Chuyển nhượng vé",
-                            tint = PrimaryBlue,
-                            modifier = Modifier.size(19.dp)
-                        )
-                    }
+                    FrostedIconButton(
+                        icon = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Chuyển nhượng vé",
+                        onClick = { showTransferModal = true },
+                        tint = PrimaryBlue
+                    )
                 }
             }
         ) { padding ->
@@ -627,44 +609,15 @@ fun TicketDetailScreen(
                                 modifier = Modifier.padding(top = 10.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text(
-                                    text = "1. Chữ ký số Server (ECDSA P-256 / SHA-256): Chống tự tạo vé giả",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextDark
-                                )
-                                Text(
-                                    text = "Sig: ${ticket.serverSignature.take(36).ifEmpty { "MEQCIQD8xM9Z0f2... (ECDSA P-256)" }}...",
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = TextMuted
-                                )
-
-                                Text(
-                                    text = "2. Hạt giống TOTP (HMAC-SHA256 30s) + FLAG_SECURE: Chống chụp ảnh QR",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextDark
-                                )
-                                Text(
-                                    text = "Nonce: ${ticket.nonce.ifEmpty { "1f48a204e9c7d81a" }} | Chu kỳ đổi mã: 30 giây",
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = TextMuted
-                                )
-
-                                Text(
-                                    text = "3. Ràng buộc Phần cứng (Device Binding): ${KeystoreManager.getHardwareSecurityLevel()}",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF16836F)
-                                )
-
-                                Text(
-                                    text = "4. Chuyển nhượng Vé Zero-Trust: Ký số bằng khóa TEE + Vân tay & cấp đổi Seed mới",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = PrimaryBlue
+                                CryptoTerminalBox(
+                                    title = "ECDSA P-256 & TOTP Proof",
+                                    badgeText = "TEE VERIFIED",
+                                    lines = listOf(
+                                        "1. ECDSA P-256 SIG" to (ticket.serverSignature.take(40).ifEmpty { "MEQCIQD8xM9Z0f2... (ECDSA P-256)" } + "..."),
+                                        "2. TOTP NONCE (30S)" to "${ticket.nonce.ifEmpty { "1f48a204e9c7d81a" }} · FLAG_SECURE",
+                                        "3. HARDWARE TEE" to KeystoreManager.getHardwareSecurityLevel(),
+                                        "4. ZERO-TRUST TRANSFER" to "TEE Signature + Biometric + Seed Rotation"
+                                    )
                                 )
 
                                 Spacer(modifier = Modifier.height(4.dp))
@@ -683,12 +636,12 @@ fun TicketDetailScreen(
                                             true
                                         }
                                         signatureCheckResult = if (isRealVerified || ticket.serverSignature.isNotBlank()) {
-                                            "✓ XÁC MINH THÀNH CÔNG: Chữ ký ECDSA P-256 khớp với Khóa công khai của Server và khóa thiết bị trong AndroidKeyStore TEE!"
+                                            "XÁC MINH THÀNH CÔNG: Chữ ký ECDSA P-256 khớp với Khóa công khai của Server và khóa thiết bị trong AndroidKeyStore TEE!"
                                         } else {
-                                            "✗ CẢNH BÁO: Chữ ký vé không khớp!"
+                                            "CẢNH BÁO: Chữ ký vé không khớp!"
                                         }
                                     },
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
                                     Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -697,19 +650,11 @@ fun TicketDetailScreen(
                                 }
 
                                 if (signatureCheckResult != null) {
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = Color(0xFFDCFCE7),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            text = signatureCheckResult!!,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF166534),
-                                            modifier = Modifier.padding(10.dp)
-                                        )
-                                    }
+                                    val isSigOk = signatureCheckResult!!.startsWith("XÁC MINH THÀNH CÔNG")
+                                    SemanticAlertBanner(
+                                        type = if (isSigOk) AlertType.SUCCESS else AlertType.ERROR,
+                                        message = signatureCheckResult!!
+                                    )
                                 }
                             }
                         }
@@ -886,6 +831,7 @@ private fun SecureTransferSheet(
                                             ?: "Không tìm thấy người nhận (${res.code()})"
                                     }
                                 } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     errorText = "Lỗi kết nối: ${e.message}"
                                 } finally {
                                     isBusy = false
@@ -937,17 +883,13 @@ private fun SecureTransferSheet(
                         }
                     }
 
-                    Surface(
-                        shape = RoundedCornerShape(12.dp), color = Color(0xFFFEF2F2),
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-                    ) {
-                        Text(
-                            "⚠️ Cảnh báo lừa đảo: SecureTicket KHÔNG BAO GIỜ yêu cầu bạn chuyển vé để \"xác minh\", " +
-                                "\"nhận thưởng\" hay \"hoàn tiền\". Chỉ chuyển vé cho người bạn quen biết. Giao dịch không thể hoàn tác.",
-                            fontSize = 10.sp, color = Color(0xFF991B1B), lineHeight = 14.sp,
-                            modifier = Modifier.padding(10.dp)
-                        )
-                    }
+                    SemanticAlertBanner(
+                        type = AlertType.ERROR,
+                        title = "Cảnh báo lừa đảo",
+                        message = "SecureTicket KHÔNG BAO GIỜ yêu cầu bạn chuyển vé để \"xác minh\", " +
+                            "\"nhận thưởng\" hay \"hoàn tiền\". Chỉ chuyển vé cho người bạn quen biết. Giao dịch không thể hoàn tác.",
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
 
                     CheckRow(confirmIdentity, { confirmIdentity = it },
                         "Tôi xác nhận đúng người nhận là ${r.fullName}")
@@ -1065,6 +1007,7 @@ private fun SecureTransferSheet(
                                                     ?: "Lỗi chuyển nhượng (${res.code()})"
                                             }
                                         } catch (e: Exception) {
+                                            if (e is kotlinx.coroutines.CancellationException) throw e
                                             errorText = "Lỗi: ${e.message}"
                                         } finally {
                                             isBusy = false

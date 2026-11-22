@@ -1,6 +1,13 @@
 package com.example.quan_ly_ticket.ui.screens
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,9 +33,13 @@ import androidx.compose.ui.unit.sp
 import com.example.quan_ly_ticket.data.api.ApiClient
 import com.example.quan_ly_ticket.data.local.SecurePreferences
 import com.example.quan_ly_ticket.data.model.*
+import com.example.quan_ly_ticket.ui.components.AlertType
 import com.example.quan_ly_ticket.ui.components.EventCardSkeleton
 import com.example.quan_ly_ticket.ui.components.EventCoverImage
+import com.example.quan_ly_ticket.ui.components.FrostedCapsuleBottomNav
 import com.example.quan_ly_ticket.ui.components.GlassCard
+import com.example.quan_ly_ticket.ui.components.NavTabItem
+import com.example.quan_ly_ticket.ui.components.SemanticAlertBanner
 import com.example.quan_ly_ticket.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
@@ -73,6 +84,7 @@ fun OrganizerDashboardScreen(
                     auditLogs = auditRes.body()!!.data!!
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Toast.makeText(context, "Lỗi tải dữ liệu BTC: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
                 isLoading = false
@@ -82,29 +94,19 @@ fun OrganizerDashboardScreen(
 
     LaunchedEffect(Unit) { loadAll() }
 
+    val orgTabs = remember {
+        listOf(
+            NavTabItem("Sự kiện", Icons.Default.Event),
+            NavTabItem("Thu hồi vé", Icons.Default.GppBad),
+            NavTabItem("SIEM An ninh", Icons.Default.Shield)
+        )
+    }
+
     AppBackground {
-        Scaffold(
-            containerColor = Color.Transparent,
-            contentWindowInsets = WindowInsets(0, 0, 0, 0),
-            bottomBar = {
-                Column(modifier = Modifier.fillMaxWidth().background(Color.White)) {
-                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(BorderLight))
-                    Row(
-                        modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceAround,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OrgTabItem("Sự kiện", Icons.Default.Event, activeTab == 0) { activeTab = 0 }
-                        OrgTabItem("Thu hồi vé", Icons.Default.GppBad, activeTab == 1) { activeTab = 1 }
-                        OrgTabItem("SIEM An ninh", Icons.Default.Shield, activeTab == 2) { activeTab = 2 }
-                    }
-                }
-            }
-        ) { padding ->
+        Box(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -174,7 +176,19 @@ fun OrganizerDashboardScreen(
                     }
                 }
 
-                when (activeTab) {
+                AnimatedContent(
+                    targetState = activeTab,
+                    transitionSpec = {
+                        val direction = if (targetState >= initialState) 1 else -1
+                        (fadeIn(animationSpec = tween(200, easing = FastOutSlowInEasing)) +
+                            slideInHorizontally(animationSpec = tween(220, easing = FastOutSlowInEasing)) {
+                                direction * (it / 16)
+                            }) togetherWith
+                            fadeOut(animationSpec = tween(140, easing = FastOutSlowInEasing))
+                    },
+                    label = "org_tab_transition"
+                ) { tab ->
+                when (tab) {
                     // ================= TAB 0: TỔNG QUAN & QUẢN LÝ SỰ KIỆN =================
                     0 -> {
                         val s = dashboard.summary
@@ -264,13 +278,11 @@ fun OrganizerDashboardScreen(
 
                     // ================= TAB 1: QUẢN LÝ VÉ & THU HỒI VÉ GIAN LẬN =================
                     1 -> {
-                        Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFFFEF2F2), modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                "Chức năng Thu hồi Vé Tức Thì (Instant Revocation): Khi phát hiện phe vé hoặc gian lận, Ban tổ chức xác thực sinh trắc học để vô hiệu hóa vé & hủy seed TOTP ngay lập tức. Email khách được che mờ để bảo vệ PII.",
-                                fontSize = 11.sp, color = Color(0xFF991B1B), lineHeight = 16.sp,
-                                modifier = Modifier.padding(12.dp)
-                            )
-                        }
+                        SemanticAlertBanner(
+                            type = AlertType.ERROR,
+                            title = "Thu hồi Vé Tức Thì (Instant Revocation)",
+                            message = "Khi phát hiện phe vé hoặc gian lận, Ban tổ chức xác thực sinh trắc học để vô hiệu hóa vé & hủy seed TOTP ngay lập tức. Email khách được che mờ để bảo vệ PII."
+                        )
 
                         dashboard.recentTickets.forEach { t ->
                             val isActive = t.status == "ACTIVE"
@@ -326,6 +338,7 @@ fun OrganizerDashboardScreen(
                                                                 Toast.makeText(context, res.body()?.error ?: "Lỗi thu hồi", Toast.LENGTH_SHORT).show()
                                                             }
                                                         } catch (e: Exception) {
+                                                            if (e is kotlinx.coroutines.CancellationException) throw e
                                                             Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
                                                         }
                                                     }
@@ -421,9 +434,17 @@ fun OrganizerDashboardScreen(
                         }
                     }
                 }
+                }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(92.dp))
             }
+
+            FrostedCapsuleBottomNav(
+                items = orgTabs,
+                selectedIndex = activeTab,
+                onSelect = { activeTab = it },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     }
 
@@ -496,6 +517,7 @@ fun OrganizerDashboardScreen(
                                     Toast.makeText(context, res.body()?.error ?: "Lỗi tạo sự kiện", Toast.LENGTH_SHORT).show()
                                 }
                             } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
                                 Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
                             } finally {
                                 isCreating = false
@@ -522,22 +544,5 @@ private fun OrgKpiCard(title: String, value: String, accent: Color, modifier: Mo
             Text(title, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = TextMuted)
             Text(value, fontSize = 17.sp, fontWeight = FontWeight.Black, color = accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-    }
-}
-
-@Composable
-private fun OrgTabItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
-    val tint = if (selected) PrimaryBlue else TextSubtle
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) Color(0xFFEFF6FF) else Color.Transparent)
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(19.dp))
-        Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold, color = tint)
     }
 }

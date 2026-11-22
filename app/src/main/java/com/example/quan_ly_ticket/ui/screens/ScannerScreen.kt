@@ -4,6 +4,7 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.*
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -34,6 +35,7 @@ import com.example.quan_ly_ticket.data.api.ApiClient
 import com.example.quan_ly_ticket.data.model.ValidateQrRequest
 import com.example.quan_ly_ticket.data.model.ValidationResultData
 import com.example.quan_ly_ticket.security.NfcReaderHelper
+import com.example.quan_ly_ticket.ui.components.FrostedIconButton
 import com.example.quan_ly_ticket.ui.theme.*
 import kotlinx.coroutines.launch
 
@@ -94,6 +96,7 @@ fun ScannerScreen(
                     validationResult = Pair(false, errMsg)
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 validationResult = Pair(false, "Lỗi kết nối: ${e.message}")
             } finally {
                 isValidating = false
@@ -529,22 +532,32 @@ fun ScannerScreen(
                 // Mode Switcher Pill at bottom: [ QR Camera | NFC ]
                 Box(
                     modifier = Modifier
-                        .width(245.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Color(0x9E080F1B))
-                        .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(18.dp))
+                        .width(248.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color(0xB3080F1B))
+                        .border(1.dp, DarkFrostedBorderBrush, RoundedCornerShape(24.dp))
                         .padding(5.dp)
                 ) {
                     Row(modifier = Modifier.fillMaxWidth()) {
                         val isQr = currentMode == "qr"
+                        val qrBg by animateColorAsState(
+                            targetValue = if (isQr) Color.White else Color.Transparent,
+                            animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMedium),
+                            label = "scanner_qr_pill"
+                        )
+                        val nfcBg by animateColorAsState(
+                            targetValue = if (!isQr) Color.White else Color.Transparent,
+                            animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMedium),
+                            label = "scanner_nfc_pill"
+                        )
 
                         // QR Camera Pill
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(43.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (isQr) Color.White else Color.Transparent)
+                                .height(44.dp)
+                                .clip(RoundedCornerShape(19.dp))
+                                .background(qrBg)
                                 .clickable { currentMode = "qr" },
                             contentAlignment = Alignment.Center
                         ) {
@@ -560,9 +573,9 @@ fun ScannerScreen(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(43.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (!isQr) Color.White else Color.Transparent)
+                                .height(44.dp)
+                                .clip(RoundedCornerShape(19.dp))
+                                .background(nfcBg)
                                 .clickable { currentMode = "nfc" },
                             contentAlignment = Alignment.Center
                         ) {
@@ -590,23 +603,16 @@ fun ScannerScreen(
                 contentAlignment = Alignment.Center
             ) {
                 // Close NFC overlay button
-                Box(
+                FrostedIconButton(
+                    icon = Icons.Default.Close,
+                    contentDescription = "Đóng chế độ NFC",
+                    onClick = { currentMode = "qr" },
+                    tint = Color.White,
+                    darkMode = true,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(18.dp)
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color.White.copy(alpha = 0.1f))
-                        .clickable { currentMode = "qr" },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "✕",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
+                )
 
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,

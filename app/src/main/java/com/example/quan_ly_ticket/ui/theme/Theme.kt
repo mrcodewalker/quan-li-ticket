@@ -11,9 +11,15 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
-// Clean, bright, modern light palette (no heavy black blocks)
+// Swiss Precision Daylight palette
 val AppShellBg = Color(0xFFF5F7FB)
 val OrbBlue = Color(0xFFE0EAFF)
 val OrbTeal = Color(0xFFDCFCE7)
@@ -33,10 +39,59 @@ val PurpleDark = Color(0xFF6D28D9)
 val PurpleBg = Color(0xFFF5F3FF)
 val PurpleText = Color(0xFF6D28D9)
 
-val TextDark = Color(0xFF1E293B)
+val TextDark = Color(0xFF0F172A)
 val TextMuted = Color(0xFF64748B)
 val TextSubtle = Color(0xFF94A3B8)
 val BorderLight = Color(0xFFE2E8F0)
+
+// Frosted Acrylic & Specular Edge Tokens
+val FrostedSurface = Color(0xEBFFFFFF)
+val FrostedSurfaceSubtle = Color(0xCCFFFFFF)
+val FrostedBorderTop = Color(0xF2FFFFFF)
+val FrostedBorderBottom = Color(0x59CBD5E1)
+val FrostedDarkSurface = Color(0xCC0F172A)
+val FrostedDarkBorderTop = Color(0x4DFFFFFF)
+val FrostedDarkBorderBottom = Color(0x1AFFFFFF)
+
+// Dark Obsidian Crypto Terminal Tokens
+val TerminalBg = Color(0xFF0F172A)
+val TerminalHeaderBg = Color(0xFF162033)
+val TerminalBorder = Color(0xFF1E293B)
+val TerminalTextCyan = Color(0xFF38BDF8)
+val TerminalTextEmerald = Color(0xFF34D399)
+val TerminalTextMuted = Color(0xFF94A3B8)
+val TerminalTextLight = Color(0xFFE2E8F0)
+
+// Semantic Status Badge & Alert Tokens
+val SuccessBg = Color(0xFFECFDF5)
+val SuccessFg = Color(0xFF047857)
+val SuccessBorder = Color(0xFFA7F3D0)
+
+val WarningBg = Color(0xFFFFFBEB)
+val WarningFg = Color(0xFFB45309)
+val WarningBorder = Color(0xFFFDE68A)
+
+val DangerBg = Color(0xFFFEF2F2)
+val DangerFg = Color(0xFFDC2626)
+val DangerBorder = Color(0xFFFECACA)
+
+val InfoBg = Color(0xFFEFF6FF)
+val InfoFg = Color(0xFF1D4ED8)
+val InfoBorder = Color(0xFFBFDBFE)
+
+// Reusable Brushes
+val FrostedAcrylicBrush = Brush.verticalGradient(
+    colors = listOf(Color(0xF2FFFFFF), Color(0xD9F8FAFC))
+)
+val SpecularBorderBrush = Brush.verticalGradient(
+    colors = listOf(FrostedBorderTop, FrostedBorderBottom)
+)
+val DarkFrostedBorderBrush = Brush.verticalGradient(
+    colors = listOf(FrostedDarkBorderTop, FrostedDarkBorderBottom)
+)
+val AmbientHeaderBrush = Brush.verticalGradient(
+    colors = listOf(Color(0xFFE8EFFD), AppShellBg)
+)
 
 val ScannerBg = Color(0xFF0F172A)
 val ScannerGlow = Color(0xFF1E3A8A)
@@ -119,6 +174,54 @@ private val LightColorScheme = lightColorScheme(
     outline = BorderLight
 )
 
+val SecureTypography = Typography(
+    headlineMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.ExtraBold,
+        fontSize = 24.sp,
+        lineHeight = 30.sp,
+        letterSpacing = (-0.5).sp
+    ),
+    titleLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
+        letterSpacing = (-0.3).sp
+    ),
+    titleMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 16.sp,
+        lineHeight = 22.sp
+    ),
+    bodyLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 15.sp,
+        lineHeight = 22.sp
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 13.sp,
+        lineHeight = 19.sp
+    ),
+    labelLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        lineHeight = 18.sp
+    ),
+    labelSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 10.sp,
+        lineHeight = 14.sp,
+        letterSpacing = 0.5.sp
+    )
+)
+
 @Composable
 fun SecureTicketTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -126,13 +229,14 @@ fun SecureTicketTheme(
 ) {
     MaterialTheme(
         colorScheme = LightColorScheme,
-        typography = Typography(),
+        typography = SecureTypography,
         content = content
     )
 }
 
 /**
- * Clean editorial app canvas without generic blurred gradient blobs.
+ * Editorial Swiss Precision Daylight canvas with a subtle top radial light wash
+ * so floating frosted acrylic components retain clear depth separation.
  */
 @Composable
 fun AppBackground(
@@ -143,6 +247,13 @@ fun AppBackground(
         modifier = modifier
             .fillMaxSize()
             .background(AppShellBg)
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(Color(0xFFE8EFFD), Color.Transparent),
+                    center = Offset(540f, 0f),
+                    radius = 950f
+                )
+            )
     ) {
         Box(
             modifier = Modifier

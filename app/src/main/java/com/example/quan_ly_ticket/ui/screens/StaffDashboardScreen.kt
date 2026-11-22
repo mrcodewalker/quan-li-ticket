@@ -67,6 +67,7 @@ fun StaffDashboardScreen(
                     logs = res.body()!!.data!!.logs
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Toast.makeText(context, "Không thể tải lịch sử soát vé: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
                 isLoading = false
@@ -123,7 +124,7 @@ fun StaffDashboardScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(44.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .background(Color.White)
                             .border(1.dp, BorderLight, RoundedCornerShape(12.dp))
@@ -139,10 +140,10 @@ fun StaffDashboardScreen(
 
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(44.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFFFEF2F2))
-                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(12.dp))
+                            .background(DangerBg)
+                            .border(1.dp, DangerBorder, RoundedCornerShape(12.dp))
                             .clickable {
                                 scope.launch {
                                     try {
@@ -156,7 +157,7 @@ fun StaffDashboardScreen(
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Đăng xuất", tint = Color(0xFFDC2626), modifier = Modifier.size(19.dp))
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Đăng xuất", tint = DangerFg, modifier = Modifier.size(19.dp))
                     }
                 }
             }
@@ -213,22 +214,22 @@ fun StaffDashboardScreen(
                 StaffStatTile(
                     label = "Hợp lệ",
                     value = "${stats.successCount}",
-                    accent = Color(0xFF15803D),
-                    bg = Color(0xFFECFDF5),
+                    accent = SuccessFg,
+                    bg = SuccessBg,
                     modifier = Modifier.weight(1f)
                 )
                 StaffStatTile(
                     label = "Chặn Replay",
                     value = "${stats.replayBlockedCount}",
-                    accent = Color(0xFFDC2626),
-                    bg = Color(0xFFFEF2F2),
+                    accent = DangerFg,
+                    bg = DangerBg,
                     modifier = Modifier.weight(1f)
                 )
                 StaffStatTile(
                     label = "Tổng quét",
                     value = "${stats.totalScans}",
                     accent = PrimaryBlue,
-                    bg = Color(0xFFEFF6FF),
+                    bg = InfoBg,
                     modifier = Modifier.weight(1f)
                 )
             }

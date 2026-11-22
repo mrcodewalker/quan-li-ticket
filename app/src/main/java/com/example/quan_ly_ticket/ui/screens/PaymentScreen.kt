@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -20,9 +21,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -34,7 +37,11 @@ import com.example.quan_ly_ticket.data.model.CreateOrderData
 import com.example.quan_ly_ticket.data.model.SimulatePaymentRequest
 import com.example.quan_ly_ticket.data.model.Ticket
 import com.example.quan_ly_ticket.security.CryptoHelper
-import com.example.quan_ly_ticket.ui.theme.AppBackground
+import com.example.quan_ly_ticket.ui.components.AlertType
+import com.example.quan_ly_ticket.ui.components.FrostedIconButton
+import com.example.quan_ly_ticket.ui.components.GlassCard
+import com.example.quan_ly_ticket.ui.components.SemanticAlertBanner
+import com.example.quan_ly_ticket.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -90,6 +97,7 @@ fun PaymentScreen(
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 try {
                     qrBitmap = CryptoHelper.generateQrBitmap(order.qrPayload ?: order.transferContent, 512)
                 } catch (_: Exception) { }
@@ -155,6 +163,7 @@ fun PaymentScreen(
                     }
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 // Tiếp tục thử lại ở chu kỳ tiếp theo
             }
         }
@@ -165,37 +174,67 @@ fun PaymentScreen(
             containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
-                TopAppBar(
-                    windowInsets = WindowInsets(0, 0, 0, 0),
-                    title = { Text("Thanh toán vé sự kiện", fontWeight = FontWeight.Bold) },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                    navigationIcon = {
-                        IconButton(onClick = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FrostedIconButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Quay lại",
+                        onClick = {
                             scope.launch {
                                 try { ApiClient.getService(context).cancelOrder(CancelOrderRequest(order.orderId)) } catch (_: Exception) {}
                                 onCancel()
                             }
-                        }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
+                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Thanh toán VietQR",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = TextDark
+                        )
+                        Text(
+                            text = "Napas 247 · SePay Webhook",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextMuted
+                        )
                     }
-                )
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (remainingSeconds < 60) DangerBg else InfoBg
+                    ) {
+                        Text(
+                            text = "${remainingSeconds / 60}:${String.format("%02d", remainingSeconds % 60)}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontFamily = FontFamily.Monospace,
+                            style = TextStyle(fontFeatureSettings = "tnum"),
+                            color = if (remainingSeconds < 60) DangerFg else InfoFg,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
             }
         ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Card Thông tin Đơn hàng & Giá tiền
-            Card(
+            GlassCard(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                shape = RoundedCornerShape(18.dp),
+                elevation = 2.dp
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -205,118 +244,135 @@ fun PaymentScreen(
                     ) {
                         Text(
                             text = "Mã đơn: #${order.orderCode}",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.Gray
-                        )
-                        Text(
-                            text = "${remainingSeconds / 60}:${String.format("%02d", remainingSeconds % 60)}",
-                            fontSize = 14.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (remainingSeconds < 60) Color.Red else MaterialTheme.colorScheme.primary
+                            fontFamily = FontFamily.Monospace,
+                            color = TextMuted
                         )
+                        Surface(shape = RoundedCornerShape(6.dp), color = InfoBg) {
+                            Text(
+                                text = "CHỜ THANH TOÁN",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = InfoFg,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = order.eventTitle,
                         fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.ExtraBold,
+                        color = TextDark
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "Tổng thanh toán:", fontSize = 14.sp, color = Color.DarkGray)
+                        Text(text = "Tổng thanh toán", fontSize = 13.sp, color = TextMuted)
                         Text(
                             text = "${formatter.format(order.amount)} VND",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary
+                            style = TextStyle(fontFeatureSettings = "tnum"),
+                            color = PrimaryBlue
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             // Card Mã VietQR & Hướng dẫn Chuyển khoản
-            Card(
+            GlassCard(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                elevation = 4.dp
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp),
+                        .padding(18.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
                         text = "Quét mã VietQR bằng app Ngân hàng bất kỳ",
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.DarkGray
+                        fontWeight = FontWeight.Bold,
+                        color = TextDark
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Ảnh mã VietQR
-                    if (qrBitmap != null) {
-                        Image(
-                            bitmap = qrBitmap!!.asImageBitmap(),
-                            contentDescription = "VietQR Code",
-                            modifier = Modifier
-                                .size(240.dp)
-                                .background(Color.White)
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(240.dp)
-                                .background(Color(0xFFF8FAFC), RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator()
+                    // Ảnh mã VietQR trên nền trắng tinh khiết + quiet-zone >= 14dp
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.White)
+                            .border(1.dp, BorderLight, RoundedCornerShape(16.dp))
+                            .padding(14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (qrBitmap != null) {
+                            Image(
+                                bitmap = qrBitmap!!.asImageBitmap(),
+                                contentDescription = "VietQR Code",
+                                modifier = Modifier
+                                    .size(216.dp)
+                                    .background(Color.White)
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(216.dp)
+                                    .background(AppShellBg, RoundedCornerShape(12.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(color = PrimaryBlue)
+                            }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
                     LinearProgressIndicator(
                         progress = { remainingSeconds.toFloat() / order.ttlSeconds.toFloat() },
                         modifier = Modifier
                             .fillMaxWidth(0.85f)
-                            .height(6.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = Color(0xFFE2E8F0)
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = if (remainingSeconds < 60) DangerFg else PrimaryBlue,
+                        trackColor = BorderLight
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
                     // Bảng chi tiết chuyển khoản
                     Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFFF8FAFC)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, BorderLight, RoundedCornerShape(14.dp)),
+                        shape = RoundedCornerShape(14.dp),
+                        color = AppShellBg
                     ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             // Ngân hàng
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(text = "Ngân hàng:", fontSize = 12.sp, color = Color.Gray)
+                                Text(text = "Ngân hàng", fontSize = 12.sp, color = TextMuted)
                                 Text(
                                     text = "${order.bankId} (Napas 247)",
                                     fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextDark
                                 )
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
 
                             // Số tài khoản + Nút sao chép
                             Row(
@@ -324,27 +380,32 @@ fun PaymentScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(text = "Số tài khoản:", fontSize = 12.sp, color = Color.Gray)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "Số tài khoản", fontSize = 12.sp, color = TextMuted)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text(
                                         text = order.bankAccountNo,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
+                                        fontFamily = FontFamily.Monospace,
+                                        style = TextStyle(fontFeatureSettings = "tnum"),
+                                        color = TextDark
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Sao chép",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier
-                                            .clickable { copyToClipboard("Số tài khoản", order.bankAccountNo) }
-                                            .padding(4.dp)
-                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = InfoBg,
+                                        modifier = Modifier.clickable { copyToClipboard("Số tài khoản", order.bankAccountNo) }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, contentDescription = "Sao chép", tint = InfoFg, modifier = Modifier.size(12.dp))
+                                            Text(text = "Sao chép", fontSize = 10.sp, color = InfoFg, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
                                 }
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
 
                             // Chủ tài khoản
                             Row(
@@ -352,14 +413,14 @@ fun PaymentScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(text = "Chủ tài khoản:", fontSize = 12.sp, color = Color.Gray)
+                                Text(text = "Chủ tài khoản", fontSize = 12.sp, color = TextMuted)
                                 Text(
                                     text = order.accountName,
                                     fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextDark
                                 )
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
 
                             // Nội dung chuyển khoản + Nút sao chép
                             Row(
@@ -367,46 +428,49 @@ fun PaymentScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(text = "Nội dung CK:", fontSize = 12.sp, color = Color.Gray)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "Nội dung CK", fontSize = 12.sp, color = TextMuted)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Surface(
-                                        color = Color(0xFFFEF3C7),
+                                        color = WarningBg,
                                         shape = RoundedCornerShape(6.dp)
                                     ) {
                                         Text(
                                             text = order.transferContent,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                            fontSize = 13.sp,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                            fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF92400E),
+                                            color = WarningFg,
                                             fontFamily = FontFamily.Monospace
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Sao chép",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier
-                                            .clickable { copyToClipboard("Nội dung chuyển khoản", order.transferContent) }
-                                            .padding(4.dp)
-                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = InfoBg,
+                                        modifier = Modifier.clickable { copyToClipboard("Nội dung chuyển khoản", order.transferContent) }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(Icons.Default.ContentCopy, contentDescription = "Sao chép", tint = InfoFg, modifier = Modifier.size(12.dp))
+                                            Text(text = "Sao chép", fontSize = 10.sp, color = InfoFg, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "⚠️ Vui lòng giữ nguyên nội dung chuyển khoản để hệ thống tự động gạch nợ và xuất vé ngay lập tức.",
-                        fontSize = 11.sp,
-                        color = Color(0xFFB45309)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    SemanticAlertBanner(
+                        type = AlertType.WARNING,
+                        message = "Vui lòng giữ nguyên nội dung chuyển khoản để hệ thống tự động gạch nợ và xuất vé ngay lập tức."
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             // Sandbox Demo / Giả lập thanh toán tức thì
             Button(
@@ -417,7 +481,7 @@ fun PaymentScreen(
                             val api = ApiClient.getService(context)
                             val simRes = api.simulatePayment(SimulatePaymentRequest(orderId = order.orderId))
                             if (simRes.isSuccessful && simRes.body()?.success == true) {
-                                Toast.makeText(context, "⚡ [Sandbox] Đang cấp vé...", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "[Sandbox] Đang cấp vé...", Toast.LENGTH_SHORT).show()
                                 var ticket = simRes.body()!!.data
                                 if (ticket != null) {
                                     if (ticket.eventTitle.isNullOrEmpty()) {
@@ -452,6 +516,7 @@ fun PaymentScreen(
                                 Toast.makeText(context, simRes.body()?.error ?: "Lỗi giả lập", Toast.LENGTH_SHORT).show()
                             }
                         } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
                             Toast.makeText(context, "Lỗi: ${e.message}", Toast.LENGTH_SHORT).show()
                         } finally {
                             isSimulating = false
@@ -459,16 +524,16 @@ fun PaymentScreen(
                     }
                 },
                 enabled = !isSimulating,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E)),
-                modifier = Modifier.fillMaxWidth()
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AccentTeal),
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp)
             ) {
                 if (isSimulating) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp))
                 } else {
-                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("⚡ Giả lập Quét mã & Thanh toán (Test Sandbox)", fontWeight = FontWeight.Bold)
+                    Text("Giả lập Quét mã & Thanh toán (Test Sandbox)", fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -481,8 +546,8 @@ fun PaymentScreen(
                         onCancel()
                     }
                 },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 46.dp)
             ) {
                 Text("Hủy giao dịch & nhường lượt hàng đợi")
             }
@@ -490,20 +555,20 @@ fun PaymentScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Thẻ giải thích bảo mật môn học
-            Card(
+            GlassCard(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9))
+                shape = RoundedCornerShape(16.dp),
+                backgroundColor = Color(0xFFF8FAFC)
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFF334155), modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = TextDark, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Cơ chế bảo mật thanh toán (Napas 247 & Webhook)",
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp,
-                            color = Color(0xFF1E293B)
+                            color = TextDark
                         )
                     }
                     Spacer(modifier = Modifier.height(6.dp))
@@ -512,7 +577,7 @@ fun PaymentScreen(
                                 "• Vé chỉ được cấp phát khi chữ ký số ngân hàng hợp lệ và số tiền khớp đơn hàng.\n" +
                                 "• Vé điện tử sau đó được ký số độc lập bằng ECDSA P-256 trên phần cứng máy chủ.",
                         fontSize = 11.sp,
-                        color = Color(0xFF475569),
+                        color = TextMuted,
                         lineHeight = 16.sp
                     )
                 }

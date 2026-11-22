@@ -269,6 +269,7 @@ fun LoginScreen(
                                         errorMessage = res.body()?.error ?: "Đăng nhập thất bại (${res.code()})"
                                     }
                                 } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     errorMessage = "Lỗi kết nối máy chủ: ${e.message}"
                                 } finally {
                                     isLoading = false
@@ -297,81 +298,110 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Demo Shortcut Buttons (3 Khách hàng test Chuyển vé & Hàng đợi + Staff + BTC)
-            Text(
-                text = "Tài khoản mẫu kiểm thử nhanh (Mật khẩu: SecureTicket@2026):",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextMuted
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
+            // Demo Shortcut Card (3 Khách hàng test Chuyển vé & Hàng đợi + Staff + BTC)
+            GlassCard(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                shape = RoundedCornerShape(18.dp),
+                elevation = 2.dp
             ) {
-                OutlinedButton(
-                    onClick = {
-                        email = "customer@secureticket.com"
-                        password = "SecureTicket@2026"
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text("KH A (Minh Anh)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Tài khoản kiểm thử RBAC",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = TextDark
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = InfoBg
+                        ) {
+                            Text(
+                                text = "Pass: SecureTicket@2026",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = InfoFg,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
 
-                OutlinedButton(
-                    onClick = {
-                        email = "friend@example.com"
-                        password = "SecureTicket@2026"
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
-                ) {
-                    Text("KH B (Hoàng Nam)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                email = "customer@secureticket.com"
+                                password = "SecureTicket@2026"
+                            },
+                            modifier = Modifier.weight(1f).defaultMinSize(minHeight = 44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                        ) {
+                            Text("KH A (Minh Anh)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
 
-                OutlinedButton(
-                    onClick = {
-                        email = "linh.pham@secureticket.com"
-                        password = "SecureTicket@2026"
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
-                ) {
-                    Text("KH C (Khánh Linh)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        email = "staff@secureticket.com"
-                        password = "SecureTicket@2026"
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
-                ) {
-                    Text("Nhân viên Soát vé (Staff)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                        OutlinedButton(
+                            onClick = {
+                                email = "friend@example.com"
+                                password = "SecureTicket@2026"
+                            },
+                            modifier = Modifier.weight(1f).defaultMinSize(minHeight = 44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                        ) {
+                            Text("KH B (Hoàng Nam)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
 
-                OutlinedButton(
-                    onClick = {
-                        email = "organizer@secureticket.com"
-                        password = "SecureTicket@2026"
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
-                ) {
-                    Text("Ban tổ chức (Organizer)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        OutlinedButton(
+                            onClick = {
+                                email = "linh.pham@secureticket.com"
+                                password = "SecureTicket@2026"
+                            },
+                            modifier = Modifier.weight(1f).defaultMinSize(minHeight = 44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                        ) {
+                            Text("KH C (Khánh Linh)", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                email = "staff@secureticket.com"
+                                password = "SecureTicket@2026"
+                            },
+                            modifier = Modifier.weight(1f).defaultMinSize(minHeight = 44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                        ) {
+                            Text("Nhân viên Soát vé (Staff)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                email = "organizer@secureticket.com"
+                                password = "SecureTicket@2026"
+                            },
+                            modifier = Modifier.weight(1f).defaultMinSize(minHeight = 44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp)
+                        ) {
+                            Text("Ban tổ chức (Organizer)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
 
